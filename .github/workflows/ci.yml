@@ -68,7 +68,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://monitoring:monitoring@localhost:5432/monitoring
         run: pytest --cov=app --cov-report=xml --cov-report=term-missing
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-coverage
@@ -93,7 +93,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test -- --run
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: frontend/dist
