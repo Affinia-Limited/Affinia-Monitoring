@@ -10,7 +10,7 @@
 
 ### Docker Compose
 
-The stack consists of PostgreSQL 16, Redis 7, the backend (it runs `alembic upgrade head`, then Uvicorn), a Celery worker, Celery beat, and the frontend (nginx on port 8080, proxying `/api` to the backend). PostgreSQL and Redis bind to `127.0.0.1` only. The PostgreSQL credentials in `docker-compose.yml` are local throwaway values.
+The stack consists of PostgreSQL 16, Redis 7, the backend (it runs `alembic upgrade head`, then Uvicorn), a Celery worker, Celery beat, and the frontend (nginx on port 8080, proxying `/api` to the backend). Only the web UI is published (`WEB_BIND:WEB_PORT`, default `0.0.0.0:8080`); PostgreSQL, Redis and the API are reachable only on the internal Compose network. The file works with both Compose v2 (`docker compose`) and the legacy `docker-compose` 1.27+, and requires a `.env` file (copy `.env.example`). Set `POSTGRES_PASSWORD` in `.env` on any shared machine (URL-safe characters only); it applies when the database volume is first created. With the default `AUTH_MODE=dev` there is no sign-in, so do not expose the port beyond a trusted network.
 
 Defaults: `ENVIRONMENT=development`, `AUTH_MODE=dev`, `AZURE_PROVIDER=mock`, `TASK_BACKEND=celery`. Optional overrides come from a git-ignored `.env` file at the repository root. Copy `.env.example`, which contains placeholders only.
 

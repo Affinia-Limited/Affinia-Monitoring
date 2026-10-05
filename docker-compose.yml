@@ -1,10 +1,17 @@
-# Local development stack: docker compose up --build
-#   Web UI:   http://localhost:8080   (proxies /api to the backend)
-#   API docs: http://localhost:8000/api/docs
+# Full stack: PostgreSQL, Redis, API (runs migrations on start), Celery worker, Celery beat, web UI.
 #
-# Defaults run with dev authentication and the MOCK Azure provider (clearly labelled demo data),
-# so no Azure subscription or Entra app registration is needed. See docker-compose.azure.yml
-# to use real Azure and Entra ID. Settings can be overridden in a local, git-ignored .env file.
+#   docker-compose up -d --build        (legacy docker-compose v1.27+)
+#   docker compose up -d --build        (Compose v2 plugin)
+#
+#   Web UI:  http://<server>:${WEB_PORT:-8080}   (nginx serves the SPA and proxies /api to the backend)
+#
+# Only the web UI is published. PostgreSQL, Redis and the API are reachable only on the internal
+# Compose network. Settings come from ./.env (copy .env.example); the values below override the
+# ones in .env that must point at the other containers (database, Redis, task backend).
+#
+# Defaults run with dev authentication (NO sign-in: every visitor is a Super Admin) and the MOCK
+# Azure provider. Before exposing this beyond a trusted network, set AUTH_MODE=entra and configure
+# Entra ID (docs/entra-id.md, docs/user-access-management.md). See docker-compose.azure.yml for real Azure.
 
 x-backend-env: &backend-env
   ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -12,27 +19,22 @@ x-backend-env: &backend-env
   AUTH_MODE: ${AUTH_MODE:-dev}
   AZURE_PROVIDER: ${AZURE_PROVIDER:-mock}
   TASK_BACKEND: celery
-  # Local-only credentials for the throwaway development database. Never reuse elsewhere.
-  DATABASE_URL: postgresql+asyncpg://monitoring:monitoring@postgres:5432/monitoring
+  # Points at the postgres service. Use a URL-safe password (letters, digits, - and _).
+  DATABASE_URL: postgresql+asyncpg://monitoring:${POSTGRES_PASSWORD:-monitoring}@postgres:5432/monitoring
   REDIS_URL: redis://redis:6379/0
-  # List settings are comma-separated.
-  CORS_ORIGINS: http://localhost:8080,http://localhost:5173
-
-# Optional settings (Entra IDs, Key Vault URL, ...) come from a local .env file if present.
-x-backend-env-file: &backend-env-file
-  - path: .env
-    required: false
+  # nginx (frontend container) is the one proxy in front of the API: use its X-Forwarded-For.
+  TRUSTED_PROXY_COUNT: "1"
+  # The browser talks to nginx on the same origin, so CORS is not needed; keep the list strict.
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
 
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      # Local-only credentials (see note above).
       POSTGRES_USER: monitoring
-      POSTGRES_PASSWORD: monitoring
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-monitoring}
       POSTGRES_DB: monitoring
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -43,9 +45,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -57,11 +58,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: monitoring-backend:local
-    env_file: *backend-env-file
+    restart: unless-stopped
+    env_file: .env
     environment: *backend-env
-    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
-    ports:
-      - "127.0.0.1:8000:8000"
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,7 +73,8 @@ services:
       context: ./backend
       dockerfile: worker.Dockerfile
     image: monitoring-worker:local
-    env_file: *backend-env-file
+    restart: unless-stopped
+    env_file: .env
     environment: *backend-env
     depends_on:
       backend:
@@ -83,7 +84,8 @@ services:
 
   beat:
     image: monitoring-worker:local
-    env_file: *backend-env-file
+    restart: unless-stopped
+    env_file: .env
     environment: *backend-env
     command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=INFO", "--schedule", "/tmp/celerybeat-schedule"]
     healthcheck:
@@ -97,6 +99,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
+        # Public build-time values only (compiled into the browser bundle).
         VITE_API_BASE_URL: /api/v1
         VITE_AUTH_MODE: ${AUTH_MODE:-dev}
         VITE_ENTRA_CLIENT_ID: ${VITE_ENTRA_CLIENT_ID:-}
@@ -104,10 +107,12 @@ services:
         VITE_ENTRA_API_SCOPE: ${VITE_ENTRA_API_SCOPE:-}
         VITE_ENTRA_REDIRECT_URI: ${VITE_ENTRA_REDIRECT_URI:-http://localhost:8080}
     image: monitoring-frontend:local
+    restart: unless-stopped
     environment:
       BACKEND_UPSTREAM: http://backend:8000
     ports:
-      - "127.0.0.1:8080:8080"
+      # Set WEB_BIND=127.0.0.1 when a host reverse proxy (nginx/Apache with TLS) fronts the stack.
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:8080"
     depends_on:
       backend:
         condition: service_healthy
