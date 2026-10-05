@@ -248,6 +248,12 @@ export interface DashboardSummary {
   project_name: string | null;
   environment_name: string | null;
   health_status: HealthStatus | null;
+  project_id?: string | null;
+  environment_id?: string | null;
+  /** Position of the environment in its project (Dev, UAT, Prod order). */
+  environment_order?: number | null;
+  /** e.g. ["azure", "app-service", "compute", "crm", "prod"] */
+  tags: string[];
 }
 
 export interface Dashboard extends DashboardSummary {

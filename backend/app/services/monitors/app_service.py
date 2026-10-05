@@ -17,8 +17,12 @@ from app.services.monitors.base import (
     gauge,
     health_card,
     line,
+    log_bars,
     log_chart,
+    log_pie,
+    log_stat,
     log_table,
+    note,
     stat,
 )
 
@@ -37,6 +41,11 @@ _SITE_METRICS: tuple[MetricDef, ...] = (
     MetricDef("health_check", "HealthCheckStatus", "Health check status", "percent", "Average"),
     MetricDef("bytes_received", "BytesReceived", "Data in", "bytes", "Total"),
     MetricDef("bytes_sent", "BytesSent", "Data out", "bytes", "Total"),
+    MetricDef("file_system_usage", "FileSystemUsage", "Disk usage", "bytes", "Average"),
+    MetricDef("io_read_bps", "IoReadBytesPerSecond", "Disk read", "bytes_per_second", "Average"),
+    MetricDef("io_write_bps", "IoWriteBytesPerSecond", "Disk write", "bytes_per_second", "Average"),
+    MetricDef("io_read_ops", "IoReadOperationsPerSecond", "Read operations", "countps", "Average"),
+    MetricDef("io_write_ops", "IoWriteOperationsPerSecond", "Write operations", "countps", "Average"),
     MetricDef(
         "connections",
         "AppConnections",
@@ -100,6 +109,164 @@ _HTTP_LOGS = (
     ),
 )
 
+# Golden signals (traffic, errors, latency, saturation) from App Service HTTP logs. ``$__interval`` is
+# replaced with a bucket size that suits the selected time range (about 120 points).
+_HTTP = "AppServiceHTTPLogs\n"
+_PUBLIC_CLIENTS = (
+    "| where isnotempty(CIp) and not(ipv4_is_private(CIp)) and CIp !startswith '169.254'\n"
+    "| extend Geo = geo_info_from_ip_address(CIp)\n"
+)
+
+
+def _q(key: str, title: str, kql: str, visualization: str = "table", category: str = "Golden signals") -> LogQueryDef:
+    return LogQueryDef(key, title, _HTTP + kql, visualization=visualization, category=category)
+
+
+_GOLDEN_SIGNALS = (
+    # Service health (single values for the selected time range)
+    _q(
+        "sli_availability",
+        "Availability",
+        "| summarize Availability = round(100.0 * countif(ScStatus < 500) / count(), 3)",
+    ),
+    _q("sli_requests", "Total requests", "| summarize Requests = count()"),
+    _q(
+        "sli_error_rate",
+        "Error rate (4xx + 5xx)",
+        "| summarize ErrorRate = round(100.0 * countif(ScStatus >= 400) / count(), 2)",
+    ),
+    _q("sli_server_errors", "Server errors (5xx)", "| summarize ServerErrors = countif(ScStatus >= 500)"),
+    _q("sli_p95", "p95 latency", "| summarize P95 = round(percentile(TimeTaken, 95), 0)"),
+    _q(
+        "sli_apdex",
+        "Apdex (T = 500 ms)",
+        "| summarize Satisfied = countif(TimeTaken <= 500),"
+        " Tolerating = countif(TimeTaken > 500 and TimeTaken <= 2000), Total = count()\n"
+        "| extend Apdex = round((Satisfied + Tolerating / 2.0) / Total, 2)",
+    ),
+    _q("sli_unique_visitors", "Unique visitors", "| summarize UniqueVisitors = dcount(CIp)"),
+    _q("sli_avg_response", "Average response time", "| summarize AvgResponseMs = round(avg(TimeTaken), 0)"),
+    _q(
+        "success_vs_failure",
+        "Request success vs failure",
+        "| summarize Success = countif(ScStatus < 400), Failed = countif(ScStatus >= 400)",
+    ),
+    # Traffic and errors
+    _q(
+        "requests_by_status_class",
+        "Request volume by status class",
+        "| summarize ['2xx'] = countif(ScStatus < 300), ['3xx'] = countif(ScStatus between (300 .. 399)),"
+        " ['4xx'] = countif(ScStatus between (400 .. 499)), ['5xx'] = countif(ScStatus >= 500)"
+        " by bin(TimeGenerated, $__interval)\n| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "error_rate_split",
+        "Error rate: client vs server",
+        "| summarize Total = count(), Client = countif(ScStatus between (400 .. 499)),"
+        " Server = countif(ScStatus >= 500) by bin(TimeGenerated, $__interval)\n"
+        "| project TimeGenerated, ['Client (4xx) %'] = round(100.0 * Client / Total, 2),"
+        " ['Server (5xx) %'] = round(100.0 * Server / Total, 2)\n| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "status_code_distribution",
+        "Status code distribution",
+        "| summarize Requests = count() by Status = tostring(ScStatus)\n| order by Requests desc",
+    ),
+    _q(
+        "daily_traffic",
+        "Daily traffic",
+        "| summarize Requests = count() by bin(TimeGenerated, 1d)\n| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "top_failing_routes",
+        "Top failing routes",
+        "| where ScStatus >= 400\n| summarize Errors = count() by Route = strcat(tostring(ScStatus), '  ', CsUriStem)\n"
+        "| top 15 by Errors",
+    ),
+    _q(
+        "request_rate",
+        "Request rate over time",
+        "| summarize Requests = count() by bin(TimeGenerated, $__interval)\n| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "overall_error_rate",
+        "Overall error rate (4xx + 5xx)",
+        "| summarize Total = count(), Errors = countif(ScStatus >= 400) by bin(TimeGenerated, $__interval)\n"
+        "| project TimeGenerated, ['Error rate %'] = round(100.0 * Errors / Total, 2)\n| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "top_urls",
+        "Top URLs being hit",
+        "| summarize Hits = count() by Url = strcat(CsMethod, '  ', CsUriStem)\n| top 15 by Hits",
+    ),
+    # Latency
+    _q(
+        "latency_percentiles",
+        "Response time percentiles",
+        "| summarize p50 = percentile(TimeTaken, 50), p90 = percentile(TimeTaken, 90),"
+        " p95 = percentile(TimeTaken, 95), p99 = percentile(TimeTaken, 99) by bin(TimeGenerated, $__interval)\n"
+        "| order by TimeGenerated asc",
+        "timechart",
+    ),
+    _q(
+        "slowest_endpoints",
+        "Slowest endpoints (by p95)",
+        "| summarize Requests = count(), AvgMs = round(avg(TimeTaken), 0), P95Ms = round(percentile(TimeTaken, 95), 0),"
+        " P99Ms = round(percentile(TimeTaken, 99), 0) by Endpoint = CsUriStem\n"
+        "| where Requests >= 5\n| top 20 by P95Ms",
+    ),
+    # Endpoint breakdown
+    _q(
+        "endpoint_performance",
+        "Endpoint performance",
+        "| summarize Requests = count(), Errors = countif(ScStatus >= 400), ['5xx'] = countif(ScStatus >= 500),"
+        " P50Ms = round(percentile(TimeTaken, 50), 0), P95Ms = round(percentile(TimeTaken, 95), 0),"
+        " P99Ms = round(percentile(TimeTaken, 99), 0) by Method = CsMethod, Endpoint = CsUriStem\n"
+        "| extend ['Error %'] = round(100.0 * Errors / Requests, 2)\n| order by Requests desc\n| take 50",
+    ),
+    # Clients and geography (public client addresses only)
+    _q(
+        "traffic_by_location",
+        "Traffic by country and city",
+        _PUBLIC_CLIENTS + "| summarize Requests = count(), UniqueIPs = dcount(CIp)"
+        " by Country = tostring(Geo.country), City = tostring(Geo.city)\n| order by Requests desc\n| take 50",
+        category="Clients",
+    ),
+    _q(
+        "visitors_by_country",
+        "Visitors by country",
+        _PUBLIC_CLIENTS + "| summarize Visitors = dcount(CIp) by Country = tostring(Geo.country)\n| top 15 by Visitors",
+        category="Clients",
+    ),
+    _q(
+        "unique_clients",
+        "Unique clients over time",
+        "| summarize UniqueIPs = dcount(CIp) by bin(TimeGenerated, $__interval)\n| order by TimeGenerated asc",
+        "timechart",
+        category="Clients",
+    ),
+    _q(
+        "top_client_ips",
+        "Top client IPs by volume",
+        "| where isnotempty(CIp)\n| summarize Requests = count(), Errors = countif(ScStatus >= 400),"
+        " LastSeen = max(TimeGenerated) by ClientIP = CIp\n| top 20 by Requests",
+        category="Clients",
+    ),
+    # Diagnostics
+    _q(
+        "recent_failed_requests",
+        "Recent failed requests",
+        "| where ScStatus >= 400\n| project TimeGenerated, Method = CsMethod, Endpoint = CsUriStem, Status = ScStatus,"
+        " DurationMs = TimeTaken, ClientIP = CIp\n| order by TimeGenerated desc\n| take 200",
+        category="HTTP",
+    ),
+)
+
 _APP_INSIGHTS_LOGS = (
     LogQueryDef(
         "ai_requests_timeline",
@@ -143,7 +310,8 @@ class AppServiceMonitor(AzureResourceMonitor):
     display_name = "App Service"
     category = "Compute"
     resource_types = ("microsoft.web/sites",)
-    template_version = 2
+    #: 3: golden-signal layout (service health, traffic, latency, endpoints, saturation, clients, diagnostics).
+    template_version = 3
 
     metrics = _SITE_METRICS
     health_rules = (
@@ -153,7 +321,7 @@ class AppServiceMonitor(AzureResourceMonitor):
         HealthRule("response_time", "gt", 1000, 3000, description="Average response time (ms)"),
         HealthRule("health_check", "lt", 95, 80, description="Health check pass rate (%)"),
     )
-    log_queries = _HTTP_LOGS + _APP_INSIGHTS_LOGS
+    log_queries = _HTTP_LOGS + _GOLDEN_SIGNALS + _APP_INSIGHTS_LOGS
     comparison: ClassVar[tuple[ComparisonMetric, ...]] = (
         ComparisonMetric("plan_cpu", "avg", "CPU"),
         ComparisonMetric("plan_memory", "avg", "Memory"),
@@ -175,45 +343,99 @@ class AppServiceMonitor(AzureResourceMonitor):
         return relations
 
     def sections(self) -> tuple[Section, ...]:
+        """Golden-signal layout. Log widgets need Diagnostic settings (AppServiceHTTPLogs, AppServiceConsoleLogs,
+        AppServicePlatformLogs) sent to Log Analytics; platform-metric widgets work without any setup."""
         return (
             Section(
-                "Overview",
+                "Service health",
                 (
-                    gauge("plan_cpu", "CPU"),
-                    gauge("plan_memory", "Memory"),
-                    stat("requests", "Requests", "sum"),
-                    stat("http5xx", "HTTP 5xx", "sum"),
-                    line("CPU and memory", "plan_cpu", "plan_memory", width=8),
+                    note(
+                        "Service health",
+                        "Headline service-level indicators for the selected time range, from HTTP logs.",
+                    ),
+                    log_stat("sli_availability", "Availability", unit="percent"),
+                    log_stat("sli_requests", "Total requests"),
+                    log_stat("sli_error_rate", "Error rate (4xx + 5xx)", unit="percent"),
+                    log_stat("sli_server_errors", "Server errors (5xx)"),
+                    log_stat("sli_p95", "p95 latency", unit="milliseconds"),
+                    log_stat("sli_apdex", "Apdex (T = 500 ms)", unit="none", field="Apdex"),
+                    log_stat("sli_unique_visitors", "Unique visitors", width=3),
+                    stat("requests", "Requests (platform metric)", "sum"),
+                    log_stat("sli_avg_response", "Average response time", unit="milliseconds", width=3),
+                    log_pie("success_vs_failure", "Request success vs failure", width=3),
+                    line("CPU and memory (plan)", "plan_cpu", "plan_memory", width=8),
                     health_card(),
-                    line("Requests", "requests", width=6),
-                    line("Response time", "response_time", width=6),
                     alerts_table(width=12),
                 ),
             ),
             Section(
-                "HTTP",
+                "Traffic and errors",
                 (
-                    stat("http2xx", "2xx", "sum"),
-                    stat("http3xx", "3xx", "sum"),
-                    stat("http4xx", "4xx", "sum"),
-                    stat("http5xx", "5xx", "sum"),
-                    bars("Responses by status class", "http2xx", "http3xx", "http4xx", "http5xx", width=12),
-                    log_chart("http_5xx_timeline", "HTTP 5xx (logs)"),
-                    log_table("top_failing_paths", "Top failing paths", width=6),
-                    log_table("http_logs", "HTTP logs"),
+                    note("Traffic and errors", "Request volume and failure rates, split by status class."),
+                    log_chart("requests_by_status_class", "Request volume by status class", kind="bar", stacked=True),
+                    log_chart("error_rate_split", "Error rate: client vs server", unit="percent"),
+                    log_bars("status_code_distribution", "Status code distribution", width=3),
+                    log_chart("daily_traffic", "Daily traffic", width=4, kind="bar"),
+                    log_bars("top_failing_routes", "Top failing routes", width=5, horizontal=True),
+                    log_chart("request_rate", "Request rate over time"),
+                    line("Total HTTP requests (platform metric)", "requests"),
+                    bars("HTTP response codes (platform metric)", "http2xx", "http3xx", "http4xx", "http5xx"),
+                    log_chart("overall_error_rate", "Overall error rate (4xx + 5xx)", unit="percent"),
+                    log_bars("top_urls", "Top URLs being hit", width=12, horizontal=True),
                 ),
             ),
             Section(
-                "Resources",
+                "Latency",
                 (
-                    stat("memory_working_set", "Memory working set"),
-                    stat("cpu_time", "CPU time", "sum"),
-                    stat("connections", "Connections"),
-                    stat("plan_http_queue", "HTTP queue length", "max"),
-                    line("Memory working set", "memory_working_set"),
-                    line("Data in / out", "bytes_received", "bytes_sent"),
+                    note(
+                        "Latency",
+                        "Percentiles rather than averages: p95 and p99 describe user experience; the mean hides it.",
+                    ),
+                    log_chart("latency_percentiles", "Response time percentiles", unit="milliseconds"),
+                    log_table("slowest_endpoints", "Slowest endpoints (by p95)", width=6),
+                    line("Average response time (platform metric)", "response_time", width=12),
+                ),
+            ),
+            Section(
+                "Endpoints",
+                (
+                    note(
+                        "Endpoint breakdown",
+                        "One row per route: volume, error rate and latency percentiles side by side.",
+                    ),
+                    log_table("endpoint_performance", "Endpoint performance"),
+                ),
+            ),
+            Section(
+                "Saturation",
+                (
+                    note(
+                        "Resource saturation",
+                        "Platform metrics for this app and its App Service plan. No setup needed.",
+                    ),
+                    line("CPU time consumed", "cpu_time", width=4),
+                    line("Memory working set", "memory_working_set", width=4),
+                    line("Disk usage", "file_system_usage", width=4),
+                    line("Network in and out", "bytes_received", "bytes_sent"),
+                    line("Disk I/O throughput", "io_read_bps", "io_write_bps"),
+                    line("I/O operations", "io_read_ops", "io_write_ops"),
+                    line("Plan CPU and memory", "plan_cpu", "plan_memory"),
+                    line("HTTP queue length (plan)", "plan_http_queue"),
                     line("Health check status", "health_check"),
-                    line("HTTP queue length", "plan_http_queue"),
+                ),
+            ),
+            Section(
+                "Clients",
+                (
+                    note(
+                        "Clients and geography",
+                        "Who is calling the service, from where, and at what volume. Locations come from the public "
+                        "client IP address.",
+                    ),
+                    log_table("traffic_by_location", "Traffic by country and city", width=6),
+                    log_bars("visitors_by_country", "Visitors by country", width=6, horizontal=True),
+                    log_chart("unique_clients", "Unique clients over time"),
+                    log_table("top_client_ips", "Top client IPs by volume", width=6),
                 ),
             ),
             Section(
@@ -227,11 +449,16 @@ class AppServiceMonitor(AzureResourceMonitor):
                 ),
             ),
             Section(
-                "Logs",
+                "Diagnostics",
                 (
+                    note(
+                        "Diagnostics",
+                        "Raw log streams for investigation, once a panel above has told you where to look.",
+                    ),
+                    log_table("console_logs", "Live application logs (console)"),
+                    log_table("platform_logs", "Platform events (crashes and restarts)"),
+                    log_table("recent_failed_requests", "Recent failed requests"),
                     log_table("app_logs", "Application logs"),
-                    log_table("console_logs", "Console logs"),
-                    log_table("platform_logs", "Platform events and restarts"),
                 ),
             ),
         )

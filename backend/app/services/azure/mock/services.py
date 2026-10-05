@@ -328,7 +328,8 @@ def _summarize_parts(kql: str) -> tuple[list[str], list[str]] | None:
     match = re.search(r"\|\s*summarize\s+(.+?)(?:\s+by\s+(.+?))?\s*(?:\||$)", kql, re.S | re.I)
     if not match:
         return None
-    aggs = re.findall(r"(\w+)\s*=\s*\w+\(", match.group(1)) or ["count_"]
+    # Aliases may be plain (Requests = count()) or bracketed (['5xx'] = countif(...)).
+    aggs = [a or b for a, b in re.findall(r"(?:\[\s*'([^']+)'\s*\]|(\w+))\s*=\s*\w+\(", match.group(1))] or ["count_"]
     by_clause = match.group(2) or ""
     by_cols = []
     for part in re.split(r",(?![^(]*\))", by_clause):

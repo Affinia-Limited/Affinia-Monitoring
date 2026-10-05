@@ -40,7 +40,7 @@ export function metricsToChart(metrics: MetricOut[]): ChartData {
 const TIME_COLUMN = /^(timegenerated|timestamp)$/i;
 
 /** Timechart from a log result: first datetime column is X, numeric columns are series. */
-export function logToChart(result: LogQueryResult): ChartData | null {
+export function logToChart(result: LogQueryResult, unit = "count"): ChartData | null {
   const timeIndex = result.columns.findIndex((c) => c.type === "datetime" || TIME_COLUMN.test(c.name));
   if (timeIndex < 0 || result.rows.length === 0) return null;
   const numeric = result.columns
@@ -56,5 +56,5 @@ export function logToChart(result: LogQueryResult): ChartData | null {
       return row;
     })
     .sort((a, b) => String(a.t).localeCompare(String(b.t)));
-  return { rows, series: numeric.map(({ c, i }) => ({ key: `c${i}`, name: c.name, unit: "count" })), unit: "count" };
+  return { rows, series: numeric.map(({ c, i }) => ({ key: `c${i}`, name: c.name, unit })), unit };
 }

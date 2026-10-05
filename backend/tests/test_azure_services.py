@@ -288,6 +288,15 @@ async def test_unsupported_metric_maps_to_specific_code() -> None:
     assert info.value.code == "METRIC_NOT_SUPPORTED"
 
 
+async def test_missing_log_table_maps_to_setup_hint() -> None:
+    message = "'summarize' operator: Failed to resolve table or column expression named 'AppServiceHTTPLogs'"
+    with pytest.raises(AzureQueryError) as info:
+        async with azure_call("logs.query_resource"):
+            raise _http_error(400, message)
+    assert info.value.code == "LOG_TABLE_NOT_FOUND"
+    assert "Diagnostic settings" in info.value.message
+
+
 async def test_caching_credential_reuses_and_deduplicates_tokens() -> None:
     import asyncio
     import time as _time

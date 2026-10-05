@@ -127,8 +127,34 @@ def log_table(query: str, title: str, width: int = 12) -> Widget:
     return Widget("log_table", title, width, {"query": query})
 
 
-def log_chart(query: str, title: str, width: int = 6) -> Widget:
-    return Widget("log_chart", title, width, {"query": query})
+def log_chart(
+    query: str, title: str, width: int = 6, *, unit: str = "count", kind: str = "line", stacked: bool = False
+) -> Widget:
+    """Time series from a log query: the time column plus one series per numeric column."""
+    return Widget("log_chart", title, width, {"query": query, "unit": unit, "kind": kind, "stacked": stacked})
+
+
+def log_stat(query: str, title: str, *, unit: str = "count", field: str | None = None, width: int = 2) -> Widget:
+    """A single headline number from the first row of a log query (``field`` or the last numeric column)."""
+    config: dict[str, Any] = {"query": query, "unit": unit}
+    if field:
+        config["field"] = field
+    return Widget("log_stat", title, width, config)
+
+
+def log_bars(query: str, title: str, width: int = 6, *, unit: str = "count", horizontal: bool = False) -> Widget:
+    """Categories (first text column) against values (numeric columns), e.g. status codes or top routes."""
+    return Widget("log_bar", title, width, {"query": query, "unit": unit, "horizontal": horizontal})
+
+
+def log_pie(query: str, title: str, width: int = 6, *, unit: str = "count") -> Widget:
+    """Share of a whole: numeric columns of one row, or category/value rows."""
+    return Widget("log_pie", title, width, {"query": query, "unit": unit})
+
+
+def note(title: str, text: str, width: int = 12) -> Widget:
+    """Heading and explanatory text at the top of a section (what it shows and how to read it)."""
+    return Widget("note", title, width, {"text": text})
 
 
 def health_card(width: int = 4) -> Widget:

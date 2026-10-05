@@ -132,9 +132,19 @@ async def test_dashboards_generated_per_type(client: httpx.AsyncClient) -> None:
     await seeded(client)
     app = await find_resource(client, "app-crm-prod-uks")
     dashboard = (await client.get(f"/api/v1/dashboards/by-resource/{app['id']}", headers=auth_headers("viewer"))).json()
-    assert dashboard["sections"] == ["Overview", "HTTP", "Resources", "Application Insights", "Logs"]
+    assert dashboard["sections"] == [
+        "Service health",
+        "Traffic and errors",
+        "Latency",
+        "Endpoints",
+        "Saturation",
+        "Clients",
+        "Application Insights",
+        "Diagnostics",
+    ]
     types = {w["widget_type"] for w in dashboard["widgets"]}
-    assert {"gauge", "line_chart", "bar_chart", "log_table", "alert_table", "resource_health"} <= types
+    assert {"log_stat", "log_pie", "log_bar", "log_chart", "note", "line_chart", "bar_chart", "log_table"} <= types
+    assert {"alert_table", "resource_health"} <= types
 
     sql = await find_resource(client, "sqldb-crm-prod")
     sql_dash = (await client.get(f"/api/v1/dashboards/by-resource/{sql['id']}", headers=auth_headers("viewer"))).json()
@@ -146,6 +156,22 @@ async def test_dashboards_generated_per_type(client: httpx.AsyncClient) -> None:
 
     listing = (await client.get("/api/v1/dashboards", headers=auth_headers("viewer"))).json()
     assert all(d["type_display_name"] != "virtualNetworks" for d in listing)
+    app_entry = next(d for d in listing if d["resource_id"] == app["id"])
+    assert app_entry["project_id"] and app_entry["environment_id"] and app_entry["environment_order"] is not None
+    assert {"azure", "app-service", "crm", "prod"} <= set(app_entry["tags"])
+
+
+async def test_golden_signal_queries_run_with_interval(client: httpx.AsyncClient) -> None:
+    await seeded(client)
+    app = await find_resource(client, "app-crm-prod-uks")
+    body = {"resource_id": app["id"], "query_key": "requests_by_status_class", "time_range": "24h"}
+    result = (await client.post("/api/v1/logs/query", json=body, headers=auth_headers("operator"))).json()
+    assert "$__interval" not in result["query"] and "bin(TimeGenerated, 15m)" in result["query"]
+    assert [c["name"] for c in result["columns"]] == ["TimeGenerated", "2xx", "3xx", "4xx", "5xx"]
+    week = (
+        await client.post("/api/v1/logs/query", json={**body, "time_range": "7d"}, headers=auth_headers("operator"))
+    ).json()
+    assert "bin(TimeGenerated, 2h)" in week["query"]  # 7 days / 120 points -> 2-hour buckets
 
 
 async def test_customised_dashboard_is_preserved_and_resettable(client: httpx.AsyncClient) -> None:

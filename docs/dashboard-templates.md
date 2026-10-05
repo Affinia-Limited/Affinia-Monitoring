@@ -53,7 +53,11 @@ Configuration keys are stored in `dashboard_widgets.config`. Metric references a
 | `resource_health` | none | resource health fields |
 | `alert_table` | none | `GET /alerts?resource_id=...` |
 | `log_table` | `query` (predefined query key) | `POST /logs/query` |
-| `log_chart` | `query` (a `timechart` query) | `POST /logs/query` |
+| `log_chart` | `query` (a `timechart` query), optional `unit`, `kind` (`line`, `area`, `bar`), `stacked` | `POST /logs/query` |
+| `log_stat` | `query`, `unit`, optional `field` (else the last numeric column of the first row) | `POST /logs/query` |
+| `log_bar` | `query` (first text column = category, numeric columns = values), `unit`, `horizontal` | `POST /logs/query` |
+| `log_pie` | `query` (numeric columns of one row, or category/value rows), `unit` | `POST /logs/query` |
+| `note` | `text` (title is the heading). Section heading and guidance, like a Grafana text panel | none |
 | `dependency_map` | `query` (Source/Target edge query) | `POST /logs/query` |
 | `resource_table` | `relation`: `children`, `apps_on_plan`, `app_service_plan`, `app_insights` | `GET /resources/{id}/related/{relation}` |
 | `property_card` | `property` (an allow-listed discovery property), `label`, optional `format` (`bytes`) | resource properties |
@@ -94,3 +98,17 @@ The time range is passed to Azure as the query timespan, so KQL does not need a 
 In the UI, customised dashboards show a "Customised" badge, and the dashboard page offers "Reset to template". Users with `dashboards:manage` can enter Customise mode to remove widgets, change widths, reorder widgets within a section and add line charts from the resource's metric catalogue (`GET /resources/{id}/metric-definitions`); saving sends the full widget list to `PATCH /dashboards/{id}`, which validates every metric and log-query reference.
 
 `GET /api/v1/dashboards/templates` lists stored templates and their definitions.
+
+## App Service golden-signal dashboard
+
+The App Service template (version 3) follows the golden-signals layout: Service health, Traffic and errors, Latency, Endpoints, Saturation, Clients, Application Insights and Diagnostics. Each section is a tab, so only that section's queries run.
+
+- Log widgets query `AppServiceHTTPLogs`, `AppServiceConsoleLogs`, `AppServicePlatformLogs` and `AppServiceAppLogs` **resource-centrically** (Azure scopes the data to the app). Enable them on each app under **Diagnostic settings > Send to Log Analytics workspace**. Until then, these widgets show "No logs of this kind yet" (`LOG_TABLE_NOT_FOUND`) rather than an error.
+- Platform-metric widgets (CPU time, memory, disk, network, I/O, requests, response codes, response time) use Azure Monitor metrics and need no setup. Panels that Grafana built from the `AzureMetrics` table use these metrics directly instead.
+- `$__interval` in a query is replaced by a bucket size giving about 120 points for the selected time range (for example 15m for 24 hours, 2h for 7 days).
+- Geographic panels use `geo_info_from_ip_address` on public client addresses only. There is no map widget; locations are shown as a table and a bar chart.
+- Client IP addresses are personal data. They are shown only to roles with `logs:view`, which is needed for every log widget.
+
+## Dashboards list
+
+The Dashboards page groups dashboards into one folder per project, with a subfolder per environment in the project's own order, plus an "Unassigned" folder. Tags are derived automatically (`azure`, resource type, category, project slug, environment slug) and can be used to filter. Stars are kept in the browser.

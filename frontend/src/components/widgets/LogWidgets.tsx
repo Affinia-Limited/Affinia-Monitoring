@@ -4,9 +4,10 @@ import { useLogQuery } from "@/hooks/useMetrics";
 import type { LogQueryResult } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { logToChart } from "./chartData";
-import { TimeSeriesChart } from "./TimeSeriesChart";
+import { LogQueryError } from "./LogInsightWidgets";
+import { type ChartKind, TimeSeriesChart } from "./TimeSeriesChart";
 import { configString, type WidgetProps } from "./types";
-import { Unavailable, WidgetError, WidgetFrame, WidgetLoading } from "./WidgetFrame";
+import { Unavailable, WidgetFrame, WidgetLoading } from "./WidgetFrame";
 
 function useWidgetLog({ widget, resource }: WidgetProps) {
   return useLogQuery(resource.id, configString(widget, "query"));
@@ -28,7 +29,7 @@ export function LogTable(props: WidgetProps) {
       {query.isLoading ? (
         <WidgetLoading />
       ) : query.isError ? (
-        <WidgetError error={query.error} />
+        <LogQueryError error={query.error} />
       ) : query.data ? (
         <>
           <LogResultsTable result={query.data} pageSize={10} maxHeight={320} />
@@ -41,15 +42,17 @@ export function LogTable(props: WidgetProps) {
 
 export function LogChart(props: WidgetProps) {
   const query = useWidgetLog(props);
-  const chart = query.data ? logToChart(query.data) : null;
+  const { config } = props.widget;
+  const chart = query.data ? logToChart(query.data, configString(props.widget, "unit") ?? "count") : null;
+  const kind: ChartKind = config.kind === "bar" || config.kind === "line" ? config.kind : "area";
   return (
     <WidgetFrame title={props.widget.title}>
       {query.isLoading ? (
         <WidgetLoading />
       ) : query.isError ? (
-        <WidgetError error={query.error} />
+        <LogQueryError error={query.error} />
       ) : chart ? (
-        <TimeSeriesChart data={chart} kind="area" stacked={false} />
+        <TimeSeriesChart data={chart} kind={kind} stacked={config.stacked === true} />
       ) : (
         <div className="h-[220px]">
           <Unavailable message="No time-series rows were returned for this time range." />
@@ -79,7 +82,7 @@ export function DependencyMap(props: WidgetProps) {
       {query.isLoading ? (
         <WidgetLoading />
       ) : query.isError ? (
-        <WidgetError error={query.error} />
+        <LogQueryError error={query.error} />
       ) : edges.length === 0 ? (
         <Unavailable message="No dependency telemetry for this time range." />
       ) : (

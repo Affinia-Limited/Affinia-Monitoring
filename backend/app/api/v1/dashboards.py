@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Annotated
 
@@ -10,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUser, DbSession, require
 from app.core.errors import NotFoundError, ValidationFailedError
 from app.core.permissions import Permission
-from app.models import Dashboard, DashboardTemplate, DashboardWidget, Resource
+from app.models import Dashboard, DashboardTemplate, DashboardWidget, Environment, Project, Resource
 from app.schemas.dashboards import DashboardOut, DashboardSummary, DashboardUpdate, TemplateOut, WidgetOut
 from app.services.audit import record_audit
 from app.services.dashboards.generator import build_widgets, sync_templates
@@ -43,8 +44,27 @@ async def _summaries(db: DbSession, user: CurrentUser, dashboards: list[Dashboar
             e = lookups.environments.get(r.environment_id) if r.environment_id else None
             s.project_name = p.name if p else None
             s.environment_name = e.name if e else None
+            s.project_id = p.id if p else None
+            s.environment_id = e.id if e else None
+            s.environment_order = e.sort_order if e else None
+            s.tags = dashboard_tags(r, p, e)
         out.append(s)
     return out
+
+
+def _tag(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def dashboard_tags(resource: Resource, project: Project | None, env: Environment | None) -> list[str]:
+    """Grafana-style tags derived from what the dashboard monitors (never typed by hand)."""
+    monitor = get_monitor(resource.monitor_key)
+    tags = ["azure", _tag(type_display_name(resource.resource_type, resource.monitor_key)), _tag(monitor.category)]
+    if project:
+        tags.append(project.slug)
+    if env:
+        tags.append(env.slug)
+    return list(dict.fromkeys(t for t in tags if t))
 
 
 async def _dashboard_out(db: DbSession, user: CurrentUser, dashboard: Dashboard) -> DashboardOut:

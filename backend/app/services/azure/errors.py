@@ -62,6 +62,13 @@ async def azure_call(operation: str) -> AsyncIterator[None]:
                 "This metric is not available for this resource (it depends on the OS, tier or SKU).",
                 code="METRIC_NOT_SUPPORTED",
             ) from exc
+        if status == 400 and "failed to resolve table" in str(exc.message or exc).lower():
+            # The log table does not exist yet: the resource is not sending these logs anywhere.
+            raise AzureQueryError(
+                "No logs of this kind yet. Enable Diagnostic settings (send to a Log Analytics workspace) "
+                "for this resource, then allow a few minutes for data to arrive.",
+                code="LOG_TABLE_NOT_FOUND",
+            ) from exc
         if status == 400:
             raise AzureQueryError(_safe_azure_message(exc)) from exc
         raise AzureError() from exc

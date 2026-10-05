@@ -14,7 +14,7 @@ import type { Dashboard, ResourceDetail, Widget, WidgetIn } from "@/types/api";
 import { DashboardTabs, spanClass } from "./DashboardRenderer";
 import { resolveWidget } from "./registry";
 
-export const WIDTHS = [3, 4, 6, 8, 12];
+export const WIDTHS = [2, 3, 4, 5, 6, 8, 12];
 
 interface DraftWidget extends WidgetIn {
   key: string;

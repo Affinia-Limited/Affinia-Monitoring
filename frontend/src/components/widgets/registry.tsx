@@ -1,3 +1,4 @@
+import { LogBar, LogPie, LogStat, Note } from "./LogInsightWidgets";
 import { LogChart, DependencyMap, LogTable } from "./LogWidgets";
 import { AreaChartWidget, BarChartWidget, Gauge, LineChartWidget, MetricCard } from "./MetricWidgets";
 import {
@@ -21,6 +22,10 @@ export const WIDGET_REGISTRY: Record<string, WidgetComponent> = {
   alert_table: AlertTableWidget,
   log_table: LogTable,
   log_chart: LogChart,
+  log_stat: LogStat,
+  log_bar: LogBar,
+  log_pie: LogPie,
+  note: Note,
   resource_table: ResourceTableWidget,
   property_card: PropertyCard,
   app_insights_status: AppInsightsStatus,

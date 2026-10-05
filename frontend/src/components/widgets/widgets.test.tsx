@@ -104,6 +104,7 @@ const dashboard: Dashboard = {
   name: "app-crm-prod-uks",
   description: "App Service dashboard",
   kind: "resource",
+  tags: ["azure", "app-service"],
   resource_id: "r1",
   template_version: 2,
   is_customized: false,

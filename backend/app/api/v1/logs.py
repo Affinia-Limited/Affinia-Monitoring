@@ -12,6 +12,7 @@ Authorisation model:
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -60,6 +61,25 @@ _WORKSPACE_QUERIES = (
         category="Workspace",
     ),
 )
+
+
+#: Bucket sizes for log charts. Log Analytics accepts any bin, so these are finer than metric grains.
+_LOG_BINS = tuple(timedelta(minutes=m) for m in (1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440))
+
+
+def log_bin(time_range: TimeRange, target_points: int = 120) -> timedelta:
+    """Smallest bucket giving at most ``target_points`` points (Grafana's ``$__interval``)."""
+    ideal = time_range.duration / target_points
+    return next((b for b in _LOG_BINS if b >= ideal), _LOG_BINS[-1])
+
+
+def kql_timespan(value: timedelta) -> str:
+    """timedelta -> KQL timespan literal, e.g. 5m, 1h, 1d."""
+    seconds = int(value.total_seconds())
+    for size, suffix in ((86400, "d"), (3600, "h"), (60, "m")):
+        if seconds % size == 0:
+            return f"{seconds // size}{suffix}"
+    return f"{seconds}s"
 
 
 def _queries_for(resource: Resource) -> tuple[LogQueryDef, ...]:
@@ -181,7 +201,13 @@ async def run_query(
     else:
         raise ValidationFailedError("Provide either query_key or kql.")
 
-    query = apply_filters(base_query, body.search, body.severities, severity_column)
+    # Grafana-style bucket size: about 120 points across the selected time range.
+    query = apply_filters(
+        base_query.replace("$__interval", kql_timespan(log_bin(time_range))),
+        body.search,
+        body.severities,
+        severity_column,
+    )
     tenant = await tenant_for_resource(db, execute_on)
     result = await azure.logs.query_resource(
         tenant, execute_on.azure_id, query, time_range, get_settings().log_query_max_rows

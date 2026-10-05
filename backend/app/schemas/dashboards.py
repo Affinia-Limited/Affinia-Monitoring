@@ -18,6 +18,10 @@ WidgetType = Literal[
     "alert_table",
     "log_table",
     "log_chart",
+    "log_stat",
+    "log_bar",
+    "log_pie",
+    "note",
     "resource_table",
     "property_card",
     "app_insights_status",
@@ -57,6 +61,12 @@ class DashboardSummary(ORMModel):
     project_name: str | None = None
     environment_name: str | None = None
     health_status: str | None = None
+    project_id: uuid.UUID | None = None
+    environment_id: uuid.UUID | None = None
+    #: Position of the environment within its project, so folders list Dev, UAT, Prod in project order.
+    environment_order: int | None = None
+    #: Labels for filtering, e.g. ["azure", "app-service", "crm", "prod", "compute"].
+    tags: list[str] = []
 
 
 class DashboardOut(DashboardSummary):
