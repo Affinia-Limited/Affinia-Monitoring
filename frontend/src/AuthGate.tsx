@@ -8,6 +8,7 @@ import { ErrorState } from "@/components/ui/states";
 import { useMe } from "@/hooks/useMe";
 import { useSignOut } from "@/hooks/useSignOut";
 import { type AccessDeniedCode, AccessDeniedPage } from "@/pages/AccessDenied/AccessDeniedPage";
+import { SignInPage } from "@/pages/SignIn/SignInPage";
 import { env } from "@/utils/env";
 
 function Splash({ message }: { message: string }) {
@@ -65,11 +66,13 @@ export function MeGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Entra mode: complete the redirect flow, require an account, then audit the sign-in once. */
+/** Entra mode: complete the redirect flow, show the sign-in page without an account, then audit the sign-in once. */
 function EntraGate({ children }: { children: ReactNode }) {
   const msal = getMsal();
   const qc = useQueryClient();
   const [ready, setReady] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,11 +81,17 @@ function EntraGate({ children }: { children: ReactNode }) {
     (async () => {
       try {
         await msal.initialize();
-        const result = await msal.handleRedirectPromise();
+        let result = null;
+        try {
+          result = await msal.handleRedirectPromise();
+        } catch {
+          // Cancelled or failed at Microsoft: let the user retry from the sign-in page.
+          if (!cancelled) setSignInError("Sign-in did not complete. Please try again.");
+        }
         if (result?.account) msal.setActiveAccount(result.account);
         const account = msal.getActiveAccount() ?? msal.getAllAccounts()[0];
         if (!account) {
-          await msal.loginRedirect(loginRequest());
+          if (!cancelled) setSignedOut(true);
           return;
         }
         msal.setActiveAccount(account);
@@ -107,6 +116,7 @@ function EntraGate({ children }: { children: ReactNode }) {
 
   if (!msal) return null;
   if (error) return <Splash message={error} />;
+  if (signedOut) return <SignInPage error={signInError} onSignIn={() => msal.loginRedirect(loginRequest())} />;
   return <MsalProvider instance={msal}>{ready ? <MeGate>{children}</MeGate> : <Splash message="Signing you in..." />}</MsalProvider>;
 }
 

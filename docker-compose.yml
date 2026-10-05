@@ -22,8 +22,9 @@ x-backend-env: &backend-env
   # Points at the postgres service. Use a URL-safe password (letters, digits, - and _).
   DATABASE_URL: postgresql+asyncpg://monitoring:${POSTGRES_PASSWORD:-monitoring}@postgres:5432/monitoring
   REDIS_URL: redis://redis:6379/0
-  # nginx (frontend container) is the one proxy in front of the API: use its X-Forwarded-For.
-  TRUSTED_PROXY_COUNT: "1"
+  # Proxies in front of the API: 1 = the frontend nginx only; 2 = a host reverse proxy / TLS terminator
+  # (e.g. https://your-domain) in front of it. Needed for correct client IPs in audit logs and rate limits.
+  TRUSTED_PROXY_COUNT: ${PROXY_HOPS:-1}
   # The browser talks to nginx on the same origin, so CORS is not needed; keep the list strict.
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
 
