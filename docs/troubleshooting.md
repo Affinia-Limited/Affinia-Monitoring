@@ -9,7 +9,7 @@ Every API error includes `request_id`. Search the JSON logs for it (`"request_id
 | `401 UNAUTHENTICATED` "Authentication is required." | No bearer token (the SPA is in `dev` mode against an `entra` backend, or the reverse) | Align `VITE_AUTH_MODE` with the backend `AUTH_MODE` |
 | `401` "Sign-in from this tenant is not permitted." | The token's `tid` is not `ENTRA_TENANT_ID` or in `ENTRA_ALLOWED_TENANTS` | Add the tenant, or sign in with the home tenant |
 | `401` "The access token issuer is not trusted." | A v1.0 token (`sts.windows.net` issuer) | Set `accessTokenAcceptedVersion: 2` on the API app registration |
-| `401` "The access token was not issued for this API." | `aud` differs from `ENTRA_AUDIENCE` | Use the Application ID URI (or client ID) that appears in the token's `aud` |
+| `401` "The access token was not issued for this API." | `aud` differs from both `ENTRA_AUDIENCE` and `ENTRA_CLIENT_ID` | Use the Application ID URI (or client ID) that appears in the token's `aud` |
 | `401 TOKEN_EXPIRED` | The token lifetime has passed (60 s leeway) | The SPA renews silently. Check clock skew on the server |
 | `401` "Unable to validate the access token at this time." | The JWKS endpoint is unreachable | Allow outbound HTTPS to `login.microsoftonline.com` |
 | `403 PERMISSION_DENIED` "does not grant access to this API" | The token has neither `access_as_user` in `scp` nor app roles | Request the scope `api://<api>/access_as_user` (`VITE_ENTRA_API_SCOPE`) and grant consent |

@@ -67,6 +67,14 @@ async def test_invalid_tokens_are_rejected(client: httpx.AsyncClient, kwargs: di
     assert response.json()["error"]["code"] == code
 
 
+async def test_client_id_is_accepted_as_audience(client: httpx.AsyncClient) -> None:
+    # v2 access tokens carry the API's client id (GUID) in ``aud``, not the api:// URI.
+    from app.core.config import get_settings
+
+    token = make_token(member_oid("viewer"), aud=str(get_settings().entra_client_id))
+    assert (await _me(client, token)).status_code == 200
+
+
 async def test_symmetric_and_unsigned_tokens_are_rejected(client: httpx.AsyncClient) -> None:
     hs = jwt.encode(
         {"oid": "x", "tid": TEST_TENANT, "aud": AUDIENCE, "scp": "access_as_user"},

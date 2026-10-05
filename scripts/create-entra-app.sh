@@ -98,7 +98,8 @@ REDIS_URL=redis://localhost:6379/0
 AUTH_MODE=entra
 ENTRA_TENANT_ID=${TENANT_ID}
 ENTRA_CLIENT_ID=${APP_ID}
-ENTRA_AUDIENCE=api://${APP_ID}
+# v2 access tokens carry the client id in aud
+ENTRA_AUDIENCE=${APP_ID}
 ENTRA_REQUIRED_SCOPE=access_as_user
 ENTRA_AUTHORITY_HOST=https://login.microsoftonline.com
 # First Super Admin (${SUPER_ADMIN_UPN}). Ignored once an active Super Admin exists.

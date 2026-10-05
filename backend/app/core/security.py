@@ -126,7 +126,7 @@ class EntraTokenValidator:
                 token,
                 key=key.key,
                 algorithms=_ALLOWED_ALGORITHMS,
-                audience=settings.entra_audience,
+                audience=settings.accepted_audiences,
                 issuer=self._expected_issuer(tenant_id),
                 leeway=_LEEWAY_SECONDS,
                 options={"require": ["exp", "iat", "nbf", "aud", "iss", "tid", "oid"]},

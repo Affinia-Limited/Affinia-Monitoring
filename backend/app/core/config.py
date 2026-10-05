@@ -68,7 +68,8 @@ class Settings(BaseSettings):
     auth_mode: AuthMode = AuthMode.entra
     entra_tenant_id: str | None = None
     entra_client_id: str | None = None
-    #: Expected ``aud`` claim, usually ``api://<api-app-client-id>`` or the API client id.
+    #: Expected ``aud`` claim. v2 access tokens carry the API's client id (GUID); ``api://<client-id>``
+    #: is also accepted. ``ENTRA_CLIENT_ID`` is always accepted as an audience (see ``accepted_audiences``).
     entra_audience: str | None = None
     #: Scope the SPA requests for the API (checked in the ``scp`` claim for delegated tokens).
     entra_required_scope: str = "access_as_user"
@@ -173,6 +174,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment is Environment.production
+
+    @property
+    def accepted_audiences(self) -> list[str]:
+        """``aud`` values identifying this API: the configured audience and the API's own client id."""
+        return sorted({a for a in (self.entra_audience, self.entra_client_id) if a})
 
     @property
     def bootstrap_super_admins(self) -> set[tuple[str, str]]:

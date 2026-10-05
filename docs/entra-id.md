@@ -32,7 +32,7 @@ Sign-in uses two app registrations: one for the API and one for the single-page 
 | `AUTH_MODE` | `entra` (default) | `dev` is refused outside development and test |
 | `ENTRA_TENANT_ID` | `<tenant-guid>` | Home tenant; always allowed |
 | `ENTRA_CLIENT_ID` | `<api-client-id>` | API registration client ID |
-| `ENTRA_AUDIENCE` | `api://<api-client-id>` | Required `aud` claim |
+| `ENTRA_AUDIENCE` | `<api-client-id>` | Expected `aud` claim. v2 access tokens carry the API's client ID; `api://<api-client-id>` also works. `ENTRA_CLIENT_ID` is always accepted |
 | `ENTRA_REQUIRED_SCOPE` | `access_as_user` (default) | Required in `scp` for delegated tokens |
 | `ENTRA_ALLOWED_TENANTS` | empty | Extra tenants allowed to sign in, comma-separated |
 | `ENTRA_AUTHORITY_HOST` | `https://login.microsoftonline.com` | Authority used for JWKS and issuer |
@@ -66,7 +66,7 @@ Implemented in `app/core/security.py`:
 | Signature | Signing keys come from `<authority>/<tid>/discovery/v2.0/keys`. They are cached for one hour and refreshed when an unknown `kid` appears (key rotation) |
 | Tenant | `tid` must be `ENTRA_TENANT_ID` or appear in `ENTRA_ALLOWED_TENANTS` |
 | Issuer | `iss` must equal `<authority>/<tid>/v2.0` |
-| Audience | `aud` must equal `ENTRA_AUDIENCE` |
+| Audience | `aud` must equal `ENTRA_AUDIENCE` or `ENTRA_CLIENT_ID` |
 | Lifetime | `exp`, `nbf` and `iat` are validated with 60 seconds of leeway |
 | Required claims | `exp`, `iat`, `nbf`, `aud`, `iss`, `tid` and `oid` must be present |
 | Authorisation to call the API | `scp` contains `ENTRA_REQUIRED_SCOPE`, or the token carries app roles |
