@@ -1,7 +1,7 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { me, viewer } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 import { server } from "@/test/server";
@@ -123,5 +123,31 @@ describe("Azure Connections permissions", () => {
     );
     renderWithProviders(<AzureConnectionsPage />);
     expect(await screen.findByRole("button", { name: /Add Azure subscription/ })).toBeInTheDocument();
+  });
+});
+
+describe("Removing demo data", () => {
+  it("labels demo connections and offers a clearly named remove action", async () => {
+    let deleted: string | null = null;
+    server.use(
+      http.get("*/api/v1/azure/connections", () => HttpResponse.json([{ ...connection, status: "connected", is_demo: true }])),
+      http.delete("*/api/v1/azure/connections/:id", ({ params }) => {
+        deleted = String(params.id);
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderWithProviders(<AzureConnectionsPage />);
+    expect(await screen.findByText("Demo data")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Remove demo/ }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove demo data" }));
+    await vi.waitFor(() => expect(deleted).toBe("c1"));
+  });
+
+  it("shows a labelled Disconnect button for real connections", async () => {
+    server.use(http.get("*/api/v1/azure/connections", () => HttpResponse.json([{ ...connection, status: "connected", is_demo: false }])));
+    renderWithProviders(<AzureConnectionsPage />);
+    expect(await screen.findByRole("button", { name: /Disconnect/ })).toBeInTheDocument();
+    expect(screen.queryByText("Demo data")).not.toBeInTheDocument();
   });
 });

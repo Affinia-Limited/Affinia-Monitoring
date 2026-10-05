@@ -378,6 +378,8 @@ export interface SyncRun {
 }
 
 export interface Connection {
+  /** Connected to the built-in demo estate (synthetic data). */
+  is_demo?: boolean;
   id: string;
   name: string;
   tenant_id: string;

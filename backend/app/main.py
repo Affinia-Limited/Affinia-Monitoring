@@ -11,12 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.v1.router import api_router
-from app.core.config import TaskBackend, get_settings
+from app.core.config import AzureProvider, TaskBackend, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.db.session import dispose_engine, session_scope
 from app.services.azure.provider import close_azure_services
+from app.services.connections import archive_demo_connections
 from app.services.discovery import mark_interrupted_runs
 from app.services.monitors.registry import validate_all
 
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await sync_templates(db)
             if settings.task_backend is TaskBackend.inline:
                 await mark_interrupted_runs(db)
+            if settings.azure_provider is AzureProvider.azure:
+                # Demo connections only work with the mock provider; remove leftovers so no demo data shows.
+                await archive_demo_connections(db)
     except Exception:
         # The schema may not be migrated yet; /ready will report the database state.
         logger.warning("template_sync_skipped")

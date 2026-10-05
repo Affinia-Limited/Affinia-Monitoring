@@ -163,6 +163,11 @@ export function AzureConnectionsPage() {
                   <TR className="bg-muted/30">
                     <TD className="font-semibold" colSpan={2}>
                       {c.name}
+                      {c.is_demo ? (
+                        <Badge tone="info" className="ml-2">
+                          Demo data
+                        </Badge>
+                      ) : null}
                       {c.last_error_message ? <div className="text-xs font-normal text-critical">{c.last_error_message}</div> : null}
                     </TD>
                     <TD className="font-mono text-xs">{c.tenant_id}</TD>
@@ -191,16 +196,19 @@ export function AzureConnectionsPage() {
                           </Button>
                           <ConfirmButton
                             title={`Disconnect ${c.name}?`}
-                            description="Discovered resources and their dashboards are archived. Nothing is changed in Azure."
-                            confirmLabel="Disconnect"
+                            description={
+                              c.is_demo
+                                ? "The demo data (resources, dashboards and their health) is removed from the platform."
+                                : "Discovered resources and their dashboards are archived. Nothing is changed in Azure."
+                            }
+                            confirmLabel={c.is_demo ? "Remove demo data" : "Disconnect"}
                             onConfirm={async () => {
                               await endpoints.deleteConnection(c.id);
-                              await qc.invalidateQueries({ queryKey: ["connections"] });
-                              await qc.invalidateQueries({ queryKey: ["overview"] });
+                              await qc.invalidateQueries();
                             }}
                           >
                             <Unplug />
-                            <span className="sr-only">Disconnect {c.name}</span>
+                            {c.is_demo ? "Remove demo" : "Disconnect"}
                           </ConfirmButton>
                         </>
                       ) : null}

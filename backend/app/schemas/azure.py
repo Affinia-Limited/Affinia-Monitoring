@@ -102,6 +102,8 @@ class ConnectionOut(ORMModel):
     subscriptions: list[SubscriptionOut] = []
     resource_count: int = 0
     latest_run: SyncRunOut | None = None
+    #: Connected to the built-in demo estate (synthetic data, ``AZURE_PROVIDER=mock`` only).
+    is_demo: bool = False
 
 
 class ConnectionCreated(BaseModel):

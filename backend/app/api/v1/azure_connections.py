@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -12,7 +11,7 @@ from app.core.config import Environment as AppEnvironment
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.core.permissions import Permission
-from app.models import AzureConnection, Dashboard, Environment, Project, Resource, Subscription, SyncRun
+from app.models import AzureConnection, Environment, Project, Resource, Subscription, SyncRun
 from app.schemas.azure import (
     ConnectionCreated,
     ConnectionIn,
@@ -24,6 +23,7 @@ from app.schemas.azure import (
 )
 from app.schemas.common import column_values
 from app.services.audit import record_audit
+from app.services.connections import disconnect, is_demo_connection
 from app.services.discovery import active_run, new_steps
 from app.services.jobs import enqueue_sync
 
@@ -90,6 +90,7 @@ async def _connection_view(db: DbSession, connection: AzureConnection) -> Connec
         select(func.count(Resource.id)).where(Resource.connection_id == connection.id, Resource.deleted_at.is_(None))
     )
     out = ConnectionOut.model_validate(column_values(connection))
+    out.is_demo = is_demo_connection(connection)
     out.subscriptions = [SubscriptionOut.model_validate(s) for s in subs]
     out.resource_count = int(count or 0)
     out.latest_run = SyncRunOut.model_validate(latest) if latest else None
@@ -267,29 +268,7 @@ async def update_connection(
 @router.delete("/connections/{connection_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_connection(connection_id: uuid.UUID, request: Request, db: DbSession, user: Connector) -> None:
     connection = await _get_connection(db, user, connection_id)
-    now = datetime.now(UTC)
-    connection.deleted_at = now
-    connection.status = "disabled"
-    for sub in await db.scalars(select(Subscription).where(Subscription.connection_id == connection.id)):
-        sub.deleted_at = now
-    resource_ids = []
-    for resource in await db.scalars(
-        select(Resource).where(Resource.connection_id == connection.id, Resource.deleted_at.is_(None))
-    ):
-        resource.deleted_at = now
-        resource_ids.append(resource.id)
-    if resource_ids:
-        for dashboard in await db.scalars(select(Dashboard).where(Dashboard.resource_id.in_(resource_ids))):
-            dashboard.deleted_at = now
-    await record_audit(
-        db,
-        action="azure.connection.disconnected",
-        user=user,
-        target_type="azure_connection",
-        target_id=str(connection.id),
-        request=request,
-        details={"name": connection.name, "resources_archived": len(resource_ids)},
-    )
+    await disconnect(db, connection, user=user, request=request)
     await db.commit()
 
 
