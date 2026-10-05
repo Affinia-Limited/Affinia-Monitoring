@@ -26,6 +26,7 @@ from app.schemas.projects import (
 )
 from app.services.audit import record_audit
 from app.services.comparison import compare_environments
+from app.services.discovery import reassign_resources
 from app.services.views import (
     ScopeHealth,
     active_alert_counts_by_environment,
@@ -135,6 +136,9 @@ async def create_project(body: ProjectIn, request: Request, db: DbSession, user:
         request=request,
         details={"name": body.name, "slug": body.slug},
     )
+    await db.flush()
+    # New or changed tag values apply to existing resources straight away.
+    await reassign_resources(db, user.organization_id)
     await db.commit()
     return (await _project_views(db, user, [await _get_project(db, user, project.id)]))[0]
 
@@ -161,6 +165,9 @@ async def update_project(
         request=request,
         details={"fields": sorted(changes)},
     )
+    await db.flush()
+    # New or changed tag values apply to existing resources straight away.
+    await reassign_resources(db, user.organization_id)
     await db.commit()
     return (await _project_views(db, user, [await _get_project(db, user, project_id)]))[0]
 
@@ -219,6 +226,9 @@ async def create_environment(
         request=request,
         details={"project": project.slug, "slug": body.slug},
     )
+    await db.flush()
+    # New or changed tag values apply to existing resources straight away.
+    await reassign_resources(db, user.organization_id)
     await db.commit()
     return env
 
@@ -259,6 +269,9 @@ async def update_environment(
         request=request,
         details={"fields": sorted(changes)},
     )
+    await db.flush()
+    # New or changed tag values apply to existing resources straight away.
+    await reassign_resources(db, user.organization_id)
     await db.commit()
     return env
 

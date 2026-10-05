@@ -96,7 +96,7 @@ If a step fails, the step is marked failed, the remaining steps are marked skipp
 
 ### Resource mapping
 
-Tags are merged from the resource group and the resource, with resource tags taking precedence. The first matching key from `PROJECT_TAG_KEYS` and `ENVIRONMENT_TAG_KEYS` is compared, case-insensitively, against each project's slug, name and `tag_values`, and each environment's slug, name, `tag_values` and kind aliases (for example `prod`, `prd` and `live` for `production`). If the tags do not match, the connection's default project and environment are used. An assignment made manually through the API is never overwritten by sync.
+Tags are merged from the resource group and the resource, with resource tags taking precedence. The first matching key from `PROJECT_TAG_KEYS` and `ENVIRONMENT_TAG_KEYS` is compared, case-insensitively, against each project's slug, name and `tag_values`, and each environment's slug, name, `tag_values` and kind aliases (for example `prod`, `prd` and `live` for `production`). If the tags do not decide, the **naming convention** is used: the resource name, then its resource group name, is split into whole words on `-`, `_` and `.` (so `app-crm-prod-uks` gives `app`, `crm`, `prod`, `uks`), and a word must equal a project's slug, name or tag value exactly, and an environment's slug, name, tag value or kind alias. Names that match two projects or two environments are left unassigned rather than guessed, and words inside other words (`crmlando`) never match. After that, the connection's default project and environment are used. An assignment made manually is never overwritten. Assignment runs on every sync and also immediately when a project or environment is created or edited.
 
 ### Rendering a dashboard
 

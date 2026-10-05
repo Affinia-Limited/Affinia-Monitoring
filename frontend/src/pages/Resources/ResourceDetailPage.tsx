@@ -66,6 +66,14 @@ function KeyMetrics({ resource }: { resource: ResourceDetail }) {
   );
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  tag: "Azure tags",
+  name: "naming convention (resource or resource group name)",
+  connection_default: "connection default",
+  manual: "manual assignment",
+  none: "nothing (unassigned)",
+};
+
 function AssignmentEditor({ resource }: { resource: ResourceDetail }) {
   const qc = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects });
@@ -83,7 +91,7 @@ function AssignmentEditor({ resource }: { resource: ResourceDetail }) {
     <Card>
       <CardHeader
         title="Assignment"
-        description={`Currently assigned by: ${titleCase(resource.assignment_source)}. A manual assignment is kept across synchronisations; clearing it lets tags decide again.`}
+        description={`Currently assigned by: ${SOURCE_LABELS[resource.assignment_source] ?? titleCase(resource.assignment_source)}. A manual assignment is kept across synchronisations; clearing it lets tags and the naming convention decide again.`}
       />
       <CardContent className="flex flex-wrap items-end gap-3">
         <Field label="Project" htmlFor="assign-project" className="min-w-48">

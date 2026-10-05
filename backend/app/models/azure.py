@@ -106,7 +106,7 @@ class Resource(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
 
     project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("projects.id"), nullable=True)
     environment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("environments.id"), nullable=True)
-    #: tag | connection_default | manual | none. Manual assignments survive sync.
+    #: tag | name | connection_default | manual | none. Manual assignments survive sync.
     assignment_source: Mapped[str] = mapped_column(String(30), default="none")
 
     #: healthy | warning | critical | unknown

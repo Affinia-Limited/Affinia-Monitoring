@@ -18,6 +18,7 @@ Progress is persisted after every step so the UI can show it live.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.cache import get_cache
@@ -91,19 +93,63 @@ def environment_matches(env: Environment, value: str) -> bool:
     return v in names or v in ENVIRONMENT_ALIASES.get(env.kind, set())
 
 
+_NAME_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def name_tokens(*names: str | None) -> list[set[str]]:
+    """Words of each name, e.g. ``app-crm-prod-uks`` -> {app, crm, prod, uks}. Empty names are skipped."""
+    return [{t for t in _NAME_SPLIT.split(_fold(n)) if t} for n in names if n]
+
+
+def _unique(matches: list[Any]) -> Any | None:
+    return matches[0] if len(matches) == 1 else None
+
+
+def project_from_names(projects: list[Project], token_sets: list[set[str]]) -> Project | None:
+    """The single project named by a whole word of the resource name (or, failing that, its resource group).
+
+    Words must equal the project's slug, name or a tag value exactly: ``crm`` matches ``app-crm-prod-uks``
+    but not ``crmlando``. Ambiguous names (two projects) match nothing.
+    """
+    for tokens in token_sets:
+        found = _unique([p for p in projects if any(project_matches(p, t) for t in tokens)])
+        if found is not None:
+            return found
+    return None
+
+
+def environment_from_names(envs: list[Environment], token_sets: list[set[str]]) -> Environment | None:
+    for tokens in token_sets:
+        found = _unique([e for e in envs if any(environment_matches(e, t) for t in tokens)])
+        if found is not None:
+            return found
+    return None
+
+
 def assign(
     tags: dict[str, str],
     projects: list[Project],
     environments_by_project: dict[uuid.UUID, list[Environment]],
     default_project_id: uuid.UUID | None,
     default_environment_id: uuid.UUID | None,
+    resource_name: str | None = None,
+    resource_group: str | None = None,
 ) -> tuple[uuid.UUID | None, uuid.UUID | None, str]:
+    """Project/environment for a resource. Precedence: tags, then naming convention, then connection defaults.
+
+    The naming convention reads whole words of the resource name, then of its resource group
+    (``rg-prism-dev-uks``), so resources such as ``acrprismdevuks`` are still placed by their group.
+    """
     settings = get_settings()
     project_value = _tag_lookup(tags, settings.project_tag_keys)
     env_value = _tag_lookup(tags, settings.environment_tag_keys)
+    tokens = name_tokens(resource_name, resource_group)
 
     project = next((p for p in projects if project_value and project_matches(p, project_value)), None)
     source = "tag" if project else "none"
+    if project is None:
+        project = project_from_names(projects, tokens)
+        source = "name" if project else "none"
     if project is None and default_project_id:
         project = next((p for p in projects if p.id == default_project_id), None)
         source = "connection_default" if project else "none"
@@ -112,6 +158,8 @@ def assign(
 
     envs = environments_by_project.get(project.id, [])
     env = next((e for e in envs if env_value and environment_matches(e, env_value)), None)
+    if env is None:
+        env = environment_from_names(envs, tokens)
     if env is None and default_environment_id:
         env = next((e for e in envs if e.id == default_environment_id), None)
     return project.id, env.id if env else None, source
@@ -271,6 +319,8 @@ async def _upsert(
                 envs_by_project,
                 connection.default_project_id,
                 connection.default_environment_id,
+                resource_name=item.name,
+                resource_group=item.resource_group,
             )
             row.project_id, row.environment_id, row.assignment_source = project_id, env_id, source
 
@@ -431,3 +481,56 @@ async def mark_interrupted_runs(db: AsyncSession) -> int:
         run.status, run.error_code, run.finished_at = "failed", "INTERRUPTED", now_utc()
         run.error_message = "The API restarted while this run was in progress."
     return len(runs)
+
+
+async def reassign_resources(db: AsyncSession, organization_id: uuid.UUID) -> int:
+    """Re-applies tag and naming-convention assignment to every non-manual resource.
+
+    Called when projects or environments change, so a new project picks up its resources at once
+    instead of at the next synchronisation. Uses the stored tags (no Azure calls). Returns changes.
+    """
+    projects = list(
+        await db.scalars(
+            select(Project)
+            .where(Project.organization_id == organization_id, Project.deleted_at.is_(None))
+            .options(selectinload(Project.environments))
+            # Projects created earlier in this request may be cached without their new environments.
+            .execution_options(populate_existing=True)
+        )
+    )
+    envs_by_project = {p.id: list(p.environments) for p in projects}
+    connections = {
+        c.id: c
+        for c in await db.scalars(select(AzureConnection).where(AzureConnection.organization_id == organization_id))
+    }
+    group_tags = {
+        g.id: g.tags or {}
+        for g in await db.scalars(select(ResourceGroup).where(ResourceGroup.organization_id == organization_id))
+    }
+    changed = 0
+    for row in await db.scalars(
+        select(Resource).where(
+            Resource.organization_id == organization_id,
+            Resource.deleted_at.is_(None),
+            Resource.assignment_source != "manual",
+        )
+    ):
+        connection = connections.get(row.connection_id)
+        merged_tags = (
+            {**group_tags.get(row.resource_group_id, {}), **(row.tags or {})}
+            if row.resource_group_id
+            else row.tags or {}
+        )
+        result = assign(
+            merged_tags,
+            projects,
+            envs_by_project,
+            connection.default_project_id if connection else None,
+            connection.default_environment_id if connection else None,
+            resource_name=row.name,
+            resource_group=row.resource_group,
+        )
+        if (row.project_id, row.environment_id, row.assignment_source) != result:
+            row.project_id, row.environment_id, row.assignment_source = result
+            changed += 1
+    return changed
