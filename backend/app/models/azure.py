@@ -112,6 +112,9 @@ class Resource(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
     #: healthy | warning | critical | unknown
     health_status: Mapped[str] = mapped_column(String(20), default="unknown", index=True)
     health_reasons: Mapped[list[Any]] = mapped_column(default=list)
+    #: Latest value of every health-rule metric read during evaluation (healthy ones included), in the
+    #: monitor's rule order, so dashboards can show key metrics without extra Azure calls.
+    health_metrics: Mapped[list[Any]] = mapped_column(default=list)
     health_evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Azure Resource Health availabilityState (Available/Degraded/Unavailable/Unknown).
     azure_availability_state: Mapped[str | None] = mapped_column(String(30), nullable=True)

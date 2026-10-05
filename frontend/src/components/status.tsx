@@ -41,8 +41,10 @@ const DOT = {
   unknown: "bg-unknown",
 } as const;
 
+/** Pass ``label=""`` when the status is already spelled out next to the dot (decorative). */
 export function HealthDot({ status, label, className }: { status: string | null | undefined; label?: string; className?: string }) {
   const s = normalise(status);
+  if (label === "") return <span aria-hidden="true" className={cn("inline-block size-2.5 shrink-0 rounded-full", DOT[s], className)} />;
   return (
     <span
       role="img"

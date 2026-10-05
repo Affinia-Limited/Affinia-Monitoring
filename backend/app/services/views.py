@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,9 @@ from app.schemas.resources import ResourceOut
 from app.services.monitors.registry import get_monitor, type_display_name
 
 HEALTH_RANK = {"critical": 3, "warning": 2, "healthy": 1, "unknown": 0}
+OPEN_ALERT_STATUSES = ("active", "acknowledged")
+#: Inventory-only resources (NICs, DNS zones, ...) have no monitoring signals and no health.
+UNMONITORED_KEYS = (None, "generic")
 
 
 def worst(statuses: Sequence[str]) -> str:
@@ -41,6 +45,7 @@ class Lookups:
     environments: dict[uuid.UUID, Environment] = field(default_factory=dict)
     subscriptions: dict[uuid.UUID, Subscription] = field(default_factory=dict)
     dashboards: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
+    alert_counts: dict[uuid.UUID, int] = field(default_factory=dict)
 
 
 async def load_lookups(db: AsyncSession, organization_id: uuid.UUID, resources: Sequence[Resource]) -> Lookups:
@@ -63,6 +68,16 @@ async def load_lookups(db: AsyncSession, organization_id: uuid.UUID, resources: 
             )
         )
         lk.dashboards = {rid: did for rid, did in rows.all() if rid}
+        counts = await db.execute(
+            select(Alert.resource_id, func.count(Alert.id))
+            .where(
+                Alert.organization_id == organization_id,
+                Alert.resource_id.in_([r.id for r in resources]),
+                Alert.status.in_(OPEN_ALERT_STATUSES),
+            )
+            .group_by(Alert.resource_id)
+        )
+        lk.alert_counts = {rid: int(n) for rid, n in counts.all()}
     return lk
 
 
@@ -77,6 +92,7 @@ def resource_view(resource: Resource, lk: Lookups) -> ResourceOut:
     out.type_display_name = type_display_name(resource.resource_type, resource.monitor_key)
     out.category = get_monitor(resource.monitor_key).category
     out.dashboard_id = lk.dashboards.get(resource.id)
+    out.active_alerts = lk.alert_counts.get(resource.id, 0)
     return out
 
 
@@ -119,7 +135,63 @@ async def active_alert_counts_by_project(db: AsyncSession, organization_id: uuid
     rows = await db.execute(
         select(Resource.project_id, func.count(Alert.id))
         .join(Resource, Resource.id == Alert.resource_id)
-        .where(Alert.organization_id == organization_id, Alert.status.in_(["active", "acknowledged"]))
+        .where(Alert.organization_id == organization_id, Alert.status.in_(OPEN_ALERT_STATUSES))
         .group_by(Resource.project_id)
     )
     return {pid: int(n) for pid, n in rows.all() if pid}
+
+
+async def active_alert_counts_by_environment(
+    db: AsyncSession, organization_id: uuid.UUID
+) -> dict[tuple[uuid.UUID, uuid.UUID], int]:
+    rows = await db.execute(
+        select(Resource.project_id, Resource.environment_id, func.count(Alert.id))
+        .join(Resource, Resource.id == Alert.resource_id)
+        .where(Alert.organization_id == organization_id, Alert.status.in_(OPEN_ALERT_STATUSES))
+        .group_by(Resource.project_id, Resource.environment_id)
+    )
+    return {(pid, eid): int(n) for pid, eid, n in rows.all() if pid and eid}
+
+
+@dataclass
+class ScopeHealth:
+    """Health of the monitored resources in a project, environment or the whole organisation."""
+
+    statuses: list[str] = field(default_factory=list)
+    last_checked_at: datetime | None = None
+
+    def add(self, status: str, checked_at: datetime | None) -> None:
+        self.statuses.append(status)
+        if checked_at and (self.last_checked_at is None or checked_at > self.last_checked_at):
+            self.last_checked_at = checked_at
+
+    @property
+    def status(self) -> str:
+        return worst(self.statuses)
+
+    @property
+    def counts(self) -> HealthCounts:
+        return counts_for(self.statuses)
+
+
+async def health_by_scope(
+    db: AsyncSession, organization_id: uuid.UUID, project_ids: Sequence[uuid.UUID] | None = None
+) -> dict[tuple[uuid.UUID, uuid.UUID | None], ScopeHealth]:
+    """Monitored-resource health keyed by ``(project_id, environment_id)`` and ``(project_id, None)``."""
+    query = select(
+        Resource.project_id, Resource.environment_id, Resource.health_status, Resource.health_evaluated_at
+    ).where(
+        Resource.organization_id == organization_id,
+        Resource.deleted_at.is_(None),
+        Resource.project_id.is_not(None),
+        Resource.monitor_key.is_not(None),
+        Resource.monitor_key != "generic",
+    )
+    if project_ids is not None:
+        query = query.where(Resource.project_id.in_(project_ids))
+    scopes: dict[tuple[uuid.UUID, uuid.UUID | None], ScopeHealth] = {}
+    for pid, eid, status, checked in (await db.execute(query)).all():
+        scopes.setdefault((pid, None), ScopeHealth()).add(status, checked)
+        if eid:
+            scopes.setdefault((pid, eid), ScopeHealth()).add(status, checked)
+    return scopes

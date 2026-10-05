@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import CurrentUser, DbSession, require
 from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
@@ -59,6 +59,9 @@ async def list_alerts(
     project_id: uuid.UUID | None = None,
     environment_id: uuid.UUID | None = None,
     resource_id: uuid.UUID | None = None,
+    q: Annotated[str | None, Query(max_length=200, description="Alert title or resource name")] = None,
+    monitor_key: Annotated[str | None, Query(max_length=60, description="Resource type (monitor key)")] = None,
+    since_hours: Annotated[int | None, Query(ge=1, le=24 * 90, description="Started within the last N hours")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> Page[AlertOut]:
@@ -79,6 +82,15 @@ async def list_alerts(
         query = query.where(Resource.environment_id == environment_id)
     if resource_id:
         query = query.where(Alert.resource_id == resource_id)
+    if monitor_key:
+        query = query.where(Resource.monitor_key == monitor_key)
+    if since_hours:
+        query = query.where(Alert.started_at >= datetime.now(UTC) - timedelta(hours=since_hours))
+    if q and q.strip():
+        term = "%" + q.strip().lower().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
+        query = query.where(
+            or_(func.lower(Alert.title).like(term, escape="\\"), func.lower(Resource.name).like(term, escape="\\"))
+        )
     total = await db.scalar(select(func.count()).select_from(query.subquery()))
     alerts = list(
         await db.scalars(query.order_by(Alert.started_at.desc()).offset((page - 1) * page_size).limit(page_size))

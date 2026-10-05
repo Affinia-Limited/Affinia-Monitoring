@@ -18,7 +18,8 @@ Status as at 30/09/2026. "Implemented" means the feature is in code and covered 
 | Log Analytics queries (predefined and guarded custom KQL) | Implemented |
 | Basic alerts (metric rules, acknowledge, resolve, auto-resolve) | Implemented |
 | Health model with configurable thresholds | Implemented |
-| Global search and filters | Implemented |
+| Global search and filters | Implemented; search understands project + environment terms and returns context |
+| Project-first dashboard (overview, project, environment and resource pages with breadcrumbs, health summaries, key metrics) | Implemented 06/10/2026; tested with mock data, not against live Azure |
 | Audit logging | Implemented |
 | Platform health endpoints, Prometheus metrics, JSON logs | Implemented |
 | Docker, Compose, CI/CD (OIDC), Bicep | Written; Bicep compiles; not executed or deployed |

@@ -125,10 +125,27 @@ Only one sync runs per connection at a time. A queued or running run older than 
 
 ```text
 src/api        Axios client (token interceptor, structured error handling), endpoint functions
-src/components UI primitives (components/ui) and dashboard widgets (components/widgets)
-src/layouts    Application shell (sidebar, top bar)
-src/pages      Dashboard, Projects, Resources, Dashboards, AzureConnections, Alerts, Logs, Settings
+src/components UI primitives (components/ui), dashboard widgets (components/widgets), project and
+               environment cards (components/projects), Breadcrumbs, HealthText/HealthSummary,
+               FilterChips, Freshness, AlertsExplorer, EnvironmentResourceTable
+src/layouts    Application shell (sidebar with Administration section, top bar, global search)
+src/pages      Dashboard (overview), Projects (list, project, environment), Resources, Dashboards,
+               AzureConnections, Alerts, Logs, Settings, Users, AccessDenied, SignIn
 src/hooks, src/stores, src/types, src/utils, src/routes
 ```
+
+### Navigation model
+
+The UI is organised around the hierarchy Organisation > Project > Environment > Resource, and every level has its own URL:
+
+| Page | Route | Shows |
+| --- | --- | --- |
+| Overview | `/` | Environments by status, active alerts, what needs attention, project cards |
+| Projects | `/projects` | Project cards (searchable, filterable by status) |
+| Project | `/projects/:id` | Environment cards, project health, resource types, environment comparison, metric comparison |
+| Environment | `/projects/:id/environments/:envId` | Summary, issues, active alerts; Resources, Alerts and Logs tabs |
+| Resource | `/resources/:id` | Key metrics from the last health check, then the type-specific dashboard |
+
+Detail pages show breadcrumbs instead of the global project/environment pickers. Projects and environments come from the database: there is no project- or environment-specific code, and any number of environments with any names is supported. Health counts on these pages cover monitored resources only; inventory items (NICs, DNS zones) have no health signals. Key metrics come from `resources.health_metrics`, written by the health evaluator from values it already reads, so tables show them without extra Azure Monitor calls.
 
 A single `DashboardRenderer` renders every generated dashboard. A registry maps each backend `widget_type` to a component.

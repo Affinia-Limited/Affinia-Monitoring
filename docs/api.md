@@ -55,14 +55,14 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 
 | Method | Path | Permission | Notes |
 | --- | --- | --- | --- |
-| GET | `/overview` | `dashboards:view` | Totals, health counts, alerts, project/environment health matrix, recent alerts, resource types, Service Health, recent changes, feed errors |
-| GET | `/search?q=&limit=` | `resources:view` | Projects, environments, resources (name, resource group, type, region, friendly type names) and subscriptions |
+| GET | `/overview` | `dashboards:view` | Totals, resource health counts, `environment_health` (environments by worst status), alerts, per-project and per-environment health with `active_alerts` and `last_checked_at`, recent alerts, resource types, Service Health, recent changes, feed errors, `generated_at` and `last_synced_at` |
+| GET | `/search?q=&limit=` | `resources:view` | Projects, environments, resources (name, resource group, type, region, friendly type names), open alerts, log shortcuts and subscriptions. Compound terms such as `crm-prod` match a project plus its environment. Every hit carries `project_name`, `environment_name` and `type_display_name` where relevant |
 
 ## Projects
 
 | Method | Path | Permission |
 | --- | --- | --- |
-| GET | `/projects` | `resources:view` |
+| GET | `/projects` | `resources:view`. Health counts cover monitored resources only; each environment includes `active_alerts` and `last_checked_at` |
 | POST | `/projects` | `projects:manage` |
 | GET | `/projects/{id}` | `resources:view` |
 | PATCH | `/projects/{id}` | `projects:manage` |
@@ -93,8 +93,8 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 
 | Method | Path | Permission | Notes |
 | --- | --- | --- | --- |
-| GET | `/resources` | `resources:view` | Filters: `project_id`, `environment_id`, `subscription_id`, `resource_group`, `resource_type`, `monitor_key` (comma-separated), `location`, `health` (comma-separated), `q`, `unassigned`, `monitored_only`. Also `page`, `page_size` (up to 500) and `sort` (`name`, `type`, `health`, `location`, `last_seen`, prefix `-` for descending) |
-| GET | `/resources/facets` | `resources:view` | Counts by type, location, resource group, subscription and health (accepts the same filters) |
+| GET | `/resources` | `resources:view` | Filters: `project_id`, `environment_id`, `subscription_id`, `resource_group`, `resource_type`, `monitor_key` (comma-separated), `location`, `health` (comma-separated), `q`, `unassigned`, `monitored_only`. Each item includes `health_metrics` (latest reading of every health-rule metric from the last evaluation) and `active_alerts`. Also `page`, `page_size` (up to 500) and `sort` (`name`, `type`, `health`, `location`, `last_seen`, prefix `-` for descending) |
+| GET | `/resources/facets` | `resources:view` | Counts by type, location, resource group, subscription and health (accepts the same filters, plus `monitored_only`) |
 | GET | `/resources/monitors` | `resources:view` | Supported monitors and their non-split metrics |
 | GET | `/resources/{id}` | `resources:view` | Detail, including allow-listed properties, related IDs and Azure portal URL |
 | GET | `/resources/{id}/metric-definitions` | `resources:view` | |
@@ -119,7 +119,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 
 | Method | Path | Permission | Notes |
 | --- | --- | --- | --- |
-| GET | `/logs/targets` | `logs:view` | Resources with predefined queries, including Log Analytics workspaces |
+| GET | `/logs/targets` | `logs:view` | Resources with predefined queries, including Log Analytics workspaces, with project and environment IDs and names |
 | GET | `/logs/queries?resource_id=` | `logs:view` | Predefined queries for the target |
 | POST | `/logs/query` | `logs:view`; free-form `kql` also needs `logs:run_kql` | Body: `resource_id`, `query_key` or `kql`, `time_range`, optional `start`/`end`, `search`, `severities` |
 
@@ -127,7 +127,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 
 | Method | Path | Permission |
 | --- | --- | --- |
-| GET | `/alerts?status=active\|acknowledged\|resolved\|open&severity=&project_id=&environment_id=&resource_id=` | `alerts:view` |
+| GET | `/alerts?status=active\|acknowledged\|resolved\|open&severity=&project_id=&environment_id=&resource_id=&q=&monitor_key=&since_hours=` | `alerts:view`. `q` searches the alert title and resource name, `monitor_key` filters by resource type, `since_hours` (1 to 2160) by start time |
 | GET | `/alerts/{id}` | `alerts:view` (includes events) |
 | POST | `/alerts/{id}/acknowledge` | `alerts:acknowledge` |
 | POST | `/alerts/{id}/resolve` | `alerts:acknowledge` |

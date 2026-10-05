@@ -1,4 +1,4 @@
-import { AlertTriangle, Inbox } from "lucide-react";
+import { AlertTriangle, Inbox, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { errorMessage } from "@/api/client";
 import { cn } from "@/utils/cn";
@@ -39,8 +39,39 @@ export function EmptyState({
   );
 }
 
-/** Displays a structured API error: the safe message plus the request id for support. */
-export function ErrorState({ error, className, compact }: { error: unknown; className?: string; compact?: boolean }) {
+export function TableSkeleton({ rows = 6, label = "Loading", className }: { rows?: number; label?: string; className?: string }) {
+  return (
+    <div className={cn("space-y-3 p-4", className)} role="status" aria-label={label}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-4">
+          <Skeleton className="size-2.5 rounded-full" />
+          <Skeleton className="h-4 w-1/4" />
+          <Skeleton className="h-4 w-1/6" />
+          <Skeleton className="ml-auto h-4 w-16" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Displays a structured API error: an optional plain-language title, the safe API message and the
+ * request id for support. Raw server details are never shown (the API never returns them).
+ */
+export function ErrorState({
+  error,
+  className,
+  compact,
+  title,
+  onRetry,
+}: {
+  error: unknown;
+  className?: string;
+  compact?: boolean;
+  /** What could not be done, e.g. "Unable to load Production resources." */
+  title?: string;
+  onRetry?: () => void;
+}) {
   const { message, requestId } = errorMessage(error);
   return (
     <div
@@ -52,10 +83,21 @@ export function ErrorState({ error, className, compact }: { error: unknown; clas
       )}
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-critical" />
-      <div className="min-w-0">
-        <p className="text-foreground">{message}</p>
+      <div className="min-w-0 flex-1">
+        {title ? <p className="font-medium text-foreground">{title}</p> : null}
+        <p className={title ? "mt-0.5 text-muted-foreground" : "text-foreground"}>{message}</p>
         {requestId ? <p className="mt-0.5 text-xs text-muted-foreground">Request ID: {requestId}</p> : null}
       </div>
+      {onRetry ? (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted"
+        >
+          <RefreshCw className="size-3.5" aria-hidden="true" />
+          Retry
+        </button>
+      ) : null}
     </div>
   );
 }

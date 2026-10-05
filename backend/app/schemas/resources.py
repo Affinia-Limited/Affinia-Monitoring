@@ -32,6 +32,9 @@ class ResourceOut(ORMModel):
     health_status: str
     health_reasons: list[dict[str, Any]]
     health_evaluated_at: datetime | None
+    #: Latest reading of each health-rule metric: {metric, label, unit, value, status, window_minutes}.
+    health_metrics: list[dict[str, Any]] = []
+    active_alerts: int = 0
     azure_availability_state: str | None
     last_seen_at: datetime | None
     first_seen_at: datetime | None

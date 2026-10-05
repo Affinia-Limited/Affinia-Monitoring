@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bell, LogOut, Menu, Monitor, Moon, PanelLeft, Sun, User } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
 import { EnvironmentPill } from "@/components/status";
 import { TimeRangePicker } from "@/components/TimeRangePicker";
@@ -155,7 +155,12 @@ function UserMenu() {
   );
 }
 
+/** Pages whose URL already fixes the project/environment show breadcrumbs instead of the global pickers. */
+const CONTEXT_ROUTES = [/^\/projects\/[^/]+/, /^\/resources\/[^/]+/, /^\/dashboards\/[^/]+/, /^\/settings/, /^\/azure-connections/];
+
 export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: () => void; onOpenMobileNav: () => void }) {
+  const { pathname } = useLocation();
+  const contextKnown = CONTEXT_ROUTES.some((r) => r.test(pathname));
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-card/95 px-3 backdrop-blur md:px-4">
       <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Open navigation" onClick={onOpenMobileNav}>
@@ -167,7 +172,7 @@ export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: 
       <GlobalSearch />
       <div className="ml-auto flex items-center gap-1.5">
         <ModePills />
-        <ProjectEnvironmentSelect />
+        {contextKnown ? null : <ProjectEnvironmentSelect />}
         <TimeRangePicker />
         <Notifications />
         <ThemeMenu />

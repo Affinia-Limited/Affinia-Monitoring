@@ -52,9 +52,13 @@ export interface EnvironmentOut {
   tag_values: string[];
 }
 
+/** Health covers monitored resources only (inventory items such as NICs carry no health signal). */
 export interface EnvironmentSummary extends EnvironmentOut {
   health: HealthCounts;
   status: HealthStatus;
+  active_alerts: number;
+  /** Most recent health evaluation in this environment. */
+  last_checked_at: string | null;
 }
 
 export interface Project {
@@ -68,6 +72,7 @@ export interface Project {
   health: HealthCounts;
   status: HealthStatus;
   active_alerts: number;
+  last_checked_at: string | null;
 }
 
 export interface EnvironmentIn {
@@ -99,6 +104,15 @@ export interface HealthReason {
   window_minutes?: number;
 }
 
+export interface HealthMetricReading {
+  metric: string;
+  label: string;
+  unit: string | null;
+  value: number;
+  status: HealthStatus;
+  window_minutes: number;
+}
+
 export interface Resource {
   id: string;
   azure_id: string;
@@ -122,6 +136,9 @@ export interface Resource {
   health_status: HealthStatus;
   health_reasons: HealthReason[];
   health_evaluated_at: string | null;
+  /** Latest reading of each health-rule metric, most important first. */
+  health_metrics: HealthMetricReading[];
+  active_alerts: number;
   azure_availability_state: string | null;
   last_seen_at: string | null;
   first_seen_at: string | null;
@@ -409,6 +426,8 @@ export interface AvailableSubscription {
 
 export interface LogTarget {
   resource_id: string;
+  project_id: string | null;
+  environment_id: string | null;
   name: string;
   resource_type: string;
   type_display_name: string;
@@ -455,12 +474,16 @@ export interface LogQueryResult {
 }
 
 export interface SearchHit {
-  kind: "project" | "environment" | "resource" | "subscription";
+  kind: "project" | "environment" | "resource" | "alert" | "logs" | "subscription";
   id: string;
   title: string;
   subtitle: string;
   url: string;
   health_status?: HealthStatus | null;
+  project_name?: string | null;
+  environment_name?: string | null;
+  type_display_name?: string | null;
+  severity?: Severity | null;
 }
 
 export interface SearchResult {
@@ -559,10 +582,18 @@ export interface OverviewEnvironment {
   kind: string;
   status: HealthStatus;
   counts: HealthCounts;
+  active_alerts: number;
+  last_checked_at: string | null;
 }
 
 export interface Overview {
   is_mock: boolean;
+  /** When the API built this response. */
+  generated_at: string;
+  /** Most recent Azure synchronisation across connections. */
+  last_synced_at: string | null;
+  /** Environments by their worst monitored-resource status. */
+  environment_health: Record<HealthStatus, number>;
   totals: {
     projects: number;
     environments: number;
@@ -591,8 +622,11 @@ export interface Overview {
     id: string;
     name: string;
     slug: string;
+    description: string;
     status: HealthStatus;
     counts: HealthCounts;
+    active_alerts: number;
+    last_checked_at: string | null;
     environments: OverviewEnvironment[];
   }[];
   recent_alerts: Alert[];

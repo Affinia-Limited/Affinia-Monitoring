@@ -3,17 +3,33 @@ import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
-import { HealthDot } from "@/components/status";
+import { HEALTH_LABELS } from "@/components/health";
+import { HealthDot, SeverityBadge } from "@/components/status";
 import { useDebounce } from "@/hooks/useDebounce";
 import type { SearchHit } from "@/types/api";
 import { cn } from "@/utils/cn";
+import { FOCUS_SEARCH_EVENT } from "./Sidebar";
 
 const GROUPS: { kind: SearchHit["kind"]; label: string }[] = [
   { kind: "project", label: "Projects" },
   { kind: "environment", label: "Environments" },
   { kind: "resource", label: "Resources" },
+  { kind: "alert", label: "Open alerts" },
+  { kind: "logs", label: "Logs" },
   { kind: "subscription", label: "Subscriptions" },
 ];
+
+/** The line under a result that says where it lives, e.g. "CRM · Production · App Service · Healthy". */
+function context(hit: SearchHit): string {
+  if (hit.kind === "resource") {
+    const where = [hit.project_name, hit.environment_name].filter(Boolean);
+    return [...(where.length ? where : ["Unassigned"]), hit.type_display_name, hit.health_status ? HEALTH_LABELS[hit.health_status] : null]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (hit.kind === "alert") return [hit.subtitle, hit.project_name, hit.environment_name].filter(Boolean).join(" · ");
+  return hit.subtitle;
+}
 
 export function GlobalSearch() {
   const [text, setText] = useState("");
@@ -32,8 +48,16 @@ export function GlobalSearch() {
         setOpen(true);
       }
     };
+    const onFocusRequest = () => {
+      inputRef.current?.focus();
+      setOpen(true);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener(FOCUS_SEARCH_EVENT, onFocusRequest);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(FOCUS_SEARCH_EVENT, onFocusRequest);
+    };
   }, []);
 
   const ordered = useMemo(() => {
@@ -56,8 +80,8 @@ export function GlobalSearch() {
         role="combobox"
         aria-expanded={open && q.length > 0}
         aria-controls="global-search-results"
-        aria-label="Search projects, environments, resources and subscriptions"
-        placeholder="Search resources, projects, regions..."
+        aria-label="Search projects, environments, resources, alerts and subscriptions"
+        placeholder="Search projects, environments, resources..."
         className="h-9 w-full rounded-md border border-input bg-card pr-14 pl-8 text-sm placeholder:text-muted-foreground"
         value={text}
         onChange={(e) => {
@@ -103,11 +127,12 @@ export function GlobalSearch() {
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => go(hit)}
                     >
-                      {hit.health_status ? <HealthDot status={hit.health_status} /> : null}
+                      {hit.health_status ? <HealthDot status={hit.health_status} label="" /> : null}
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium">{hit.title}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{hit.subtitle}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{context(hit)}</span>
                       </span>
+                      {hit.kind === "alert" && hit.severity ? <SeverityBadge severity={hit.severity} /> : null}
                     </button>
                   );
                 })}

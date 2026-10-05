@@ -8,34 +8,25 @@ import { HealthDot, SeverityBadge, TimeAgo } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/states";
-import type { Overview } from "@/types/api";
+import { Freshness } from "@/components/Freshness";
+import { ProjectCard, ProjectCardSkeleton } from "@/components/projects/ProjectCard";
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
+import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
+import type { Overview, Project } from "@/types/api";
 import { cn } from "@/utils/cn";
-import { formatDateTime, formatRelative } from "@/utils/format";
+import { formatDateTime } from "@/utils/format";
+import { firstName, greeting } from "@/utils/paths";
+
+const STATUS_ORDER: Record<string, number> = { critical: 0, warning: 1, healthy: 2, unknown: 3 };
+
+/** Projects that need action first, then alphabetical. */
+function sortByAttention(projects: Project[]): Project[] {
+  const rank = (p: Project) => STATUS_ORDER[p.health.total ? p.status : "unknown"] ?? 9;
+  return [...projects].sort((a, b) => rank(a) - rank(b) || b.active_alerts - a.active_alerts || a.name.localeCompare(b.name));
+}
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString("en-GB")} ${n === 1 ? one : many}`;
-}
-
-function Headline({ o, lastSync }: { o: Overview; lastSync: string | null }) {
-  const attention = o.health.critical + o.health.warning;
-  const tone = o.health.critical ? "critical" : attention ? "warning" : "healthy";
-  const meta = [
-    plural(o.totals.projects, "project"),
-    plural(o.totals.subscriptions, "subscription"),
-    lastSync ? `last synchronised ${formatRelative(lastSync)}` : "not synchronised yet",
-  ];
-  return (
-    <div className="mb-6">
-      <h1 className="flex items-center gap-3 text-2xl font-semibold tracking-tight">
-        <HealthDot status={tone} className="size-3" />
-        {attention ? `${plural(attention, "resource")} ${attention === 1 ? "needs" : "need"} attention` : "All monitored resources are healthy"}
-      </h1>
-      <p className="mt-1.5 text-sm text-muted-foreground" title={lastSync ? formatDateTime(lastSync) : undefined}>
-        {meta.join(" · ")}
-      </p>
-    </div>
-  );
 }
 
 function SectionLink({ to, children }: { to: string; children: string }) {
@@ -77,51 +68,47 @@ function NeedsAttention({ items }: { items: Overview["needs_attention"] }) {
   );
 }
 
-function Projects({ projects }: { projects: Overview["project_health"] }) {
+function ProjectsSection() {
+  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval: 60_000 });
+  const canManage = usePermission(PERMISSIONS.manageProjects);
   return (
-    <Card>
-      <CardHeader title="Projects" actions={<SectionLink to="/projects">Manage</SectionLink>} />
-      {projects.length === 0 ? (
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            No projects yet. <Link to="/projects" className="text-primary hover:underline">Create a project</Link> to group resources by
-            application and environment.
-          </p>
-        </CardContent>
+    <section aria-labelledby="overview-projects">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 id="overview-projects" className="text-base font-semibold">
+          Projects
+        </h2>
+        <SectionLink to="/projects">View all projects</SectionLink>
+      </div>
+      {projects.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <ProjectCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : projects.isError ? (
+        <ErrorState error={projects.error} title="Unable to load projects." onRetry={() => void projects.refetch()} />
+      ) : (projects.data ?? []).length === 0 ? (
+        <Card>
+          <EmptyState
+            title="No projects yet"
+            description="Add your first Azure project to start monitoring by application and environment."
+            action={
+              canManage ? (
+                <Button asChild>
+                  <Link to="/projects?new=1">Add project</Link>
+                </Button>
+              ) : null
+            }
+          />
+        </Card>
       ) : (
-        <ul className="divide-y divide-border/70 border-t border-border/70">
-          {projects.map((p) => {
-            const empty = p.counts.total === 0;
-            return (
-              <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
-                <Link to={`/projects/${p.id}`} className={cn("w-44 shrink-0 truncate text-sm font-medium hover:underline", empty && "text-muted-foreground")}>
-                  {p.name}
-                </Link>
-                {empty ? (
-                  <span className="text-sm text-muted-foreground">No resources yet</span>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {p.environments
-                      .filter((e) => e.counts.total > 0)
-                      .map((e) => (
-                        <Link
-                          key={e.id}
-                          to={`/projects/${p.id}?environment=${e.id}`}
-                          className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs hover:bg-muted/70"
-                        >
-                          <HealthDot status={e.status} className="size-2" />
-                          {e.name}
-                          <span className="tabular text-muted-foreground">{e.counts.total}</span>
-                        </Link>
-                      ))}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {sortByAttention(projects.data ?? []).map((p) => (
+            <ProjectCard key={p.id} project={p} />
+          ))}
+        </div>
       )}
-    </Card>
+    </section>
   );
 }
 
@@ -245,10 +232,13 @@ function RecentChanges({ changes }: { changes: Overview["recent_changes"] }) {
 
 export function OverviewPage() {
   const query = useQuery({ queryKey: ["overview"], queryFn: endpoints.overview, refetchInterval: 60_000 });
-  const connections = useQuery({ queryKey: ["connections"], queryFn: endpoints.connections });
-  if (query.isLoading) return <LoadingBlock label="Loading overview" />;
-  if (query.isError || !query.data) return <ErrorState error={query.error} />;
+  const { data: me } = useMe();
+  if (query.isLoading) return <OverviewSkeleton />;
+  if (query.isError || !query.data) {
+    return <ErrorState error={query.error} title="Unable to load the overview." onRetry={() => void query.refetch()} className="mt-6" />;
+  }
   const o = query.data;
+  const name = firstName(me?.display_name);
 
   if (o.totals.connections === 0) {
     return (
@@ -267,34 +257,52 @@ export function OverviewPage() {
     );
   }
 
-  const lastSync =
-    (connections.data ?? [])
-      .map((c) => c.last_sync_at)
-      .filter((v): v is string => !!v)
-      .sort()
-      .pop() ?? null;
-
+  const envs = o.environment_health;
+  const notChecked = envs.unknown ?? 0;
   return (
-    <div className="space-y-6">
-      <div>
-        <Headline o={o} lastSync={lastSync} />
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <KpiCard
-            label="Monitored resources"
-            value={o.totals.monitored_resources}
-            hint={o.totals.inventory_resources ? `+${o.totals.inventory_resources.toLocaleString("en-GB")} inventory` : undefined}
-          />
-          <KpiCard label="Healthy" value={o.health.healthy} tone={o.health.healthy ? "healthy" : undefined} />
-          <KpiCard label="Warning" value={o.health.warning} tone={o.health.warning ? "warning" : undefined} />
-          <KpiCard label="Critical" value={o.health.critical} tone={o.health.critical ? "critical" : undefined} />
-          <KpiCard label="Active alerts" value={o.alerts.active} tone={o.alerts.active ? "critical" : undefined} />
+    <div className="space-y-8">
+      <header>
+        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Azure Monitoring</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+          {greeting()}
+          {name ? `, ${name}` : ""}
+        </h1>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="rounded-full border border-border px-2.5 py-0.5 text-xs font-medium">All projects</span>
+          <Freshness updatedAt={query.dataUpdatedAt} syncedAt={o.last_synced_at} />
         </div>
-      </div>
+      </header>
+
+      <section aria-label="Status summary" className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <KpiCard
+          label="Projects"
+          value={o.totals.projects}
+          hint={`${plural(o.totals.environments, "environment")}${notChecked ? `, ${notChecked} not checked` : ""}`}
+        />
+        <KpiCard label="Healthy" value={envs.healthy ?? 0} tone={envs.healthy ? "healthy" : undefined} hint={plural(envs.healthy ?? 0, "environment")} />
+        <KpiCard label="Warnings" value={envs.warning ?? 0} tone={envs.warning ? "warning" : undefined} hint={plural(envs.warning ?? 0, "environment")} />
+        <KpiCard label="Critical" value={envs.critical ?? 0} tone={envs.critical ? "critical" : undefined} hint={plural(envs.critical ?? 0, "environment")} />
+        <KpiCard
+          label="Active alerts"
+          value={o.alerts.active}
+          tone={o.alerts.active ? "critical" : undefined}
+          hint={
+            o.alerts.active ? (
+              <Link to="/alerts" className="hover:underline">
+                View alerts
+              </Link>
+            ) : (
+              "Nothing firing"
+            )
+          }
+        />
+      </section>
 
       {o.feed_errors.length > 0 ? (
-        <div className="rounded-lg border border-warning/30 bg-warning/5 px-5 py-3 text-sm">
+        <div role="status" className="rounded-lg border border-warning/30 bg-warning/5 px-5 py-3 text-sm">
+          <p className="font-medium">Some Azure information could not be refreshed.</p>
           {o.feed_errors.map((e) => (
-            <p key={e.connection}>
+            <p key={e.connection} className="text-muted-foreground">
               {e.connection}: {e.message}
             </p>
           ))}
@@ -302,12 +310,43 @@ export function OverviewPage() {
       ) : null}
 
       <NeedsAttention items={o.needs_attention} />
-      <Projects projects={o.project_health} />
+      <ProjectsSection />
+      {o.totals.unassigned_resources > 0 ? (
+        <p className="rounded-lg border border-border bg-card px-5 py-3 text-sm text-muted-foreground">
+          {plural(o.totals.unassigned_resources, "monitored resource")} {o.totals.unassigned_resources === 1 ? "is" : "are"} not assigned to a
+          project.{" "}
+          <Link to="/resources?view=unassigned" className="font-medium text-primary hover:underline">
+            Review unassigned resources
+          </Link>
+        </p>
+      ) : null}
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
         <ActiveAlerts alerts={o.recent_alerts} total={o.alerts.active} />
         <ServiceHealth events={o.service_health} />
       </div>
       <RecentChanges changes={o.recent_changes} />
+    </div>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-8" role="status" aria-label="Loading overview">
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-28" />
+        <Skeleton className="h-7 w-64" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} className="h-24" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <ProjectCardSkeleton key={i} />
+        ))}
+      </div>
     </div>
   );
 }

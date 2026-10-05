@@ -1,5 +1,5 @@
 // Test fixtures only. Shapes mirror the API contract; values are arbitrary.
-import type { Alert, Me, MetricOut, ResourceDetail, Widget } from "@/types/api";
+import type { Alert, EnvironmentSummary, HealthCounts, Me, MetricOut, Project, ResourceDetail, Widget } from "@/types/api";
 
 export const ALL_PERMISSIONS = [
   "alerts:acknowledge",
@@ -85,6 +85,8 @@ export const resource: ResourceDetail = {
   health_status: "healthy",
   health_reasons: [],
   health_evaluated_at: "2026-09-30T10:00:00+00:00",
+  health_metrics: [],
+  active_alerts: 0,
   azure_availability_state: "Available",
   last_seen_at: "2026-09-30T10:00:00+00:00",
   first_seen_at: "2026-09-29T10:00:00+00:00",
@@ -94,6 +96,46 @@ export const resource: ResourceDetail = {
   summary_metrics: ["plan_cpu"],
   portal_url: "https://portal.azure.com/",
 };
+
+export function counts(c: Partial<HealthCounts> = {}): HealthCounts {
+  const base = { healthy: 0, warning: 0, critical: 0, unknown: 0, ...c };
+  return { ...base, total: c.total ?? base.healthy + base.warning + base.critical + base.unknown };
+}
+
+export function environment(overrides: Partial<EnvironmentSummary> = {}): EnvironmentSummary {
+  return {
+    id: "e1",
+    project_id: "p1",
+    name: "Production",
+    slug: "prod",
+    kind: "production",
+    sort_order: 0,
+    tag_values: [],
+    status: "healthy",
+    health: counts(),
+    active_alerts: 0,
+    last_checked_at: null,
+    ...overrides,
+  };
+}
+
+/** Values are arbitrary: the UI must work for any project and any set of environments. */
+export function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "p1",
+    name: "Project One",
+    slug: "project-one",
+    description: "",
+    tag_values: [],
+    created_at: "2026-09-30T10:00:00Z",
+    status: "healthy",
+    active_alerts: 0,
+    last_checked_at: null,
+    health: counts(),
+    environments: [environment()],
+    ...overrides,
+  };
+}
 
 export function widget(overrides: Partial<Widget>): Widget {
   return { id: "w", position: 0, section: "Overview", widget_type: "metric_card", title: "Widget", width: 3, config: {}, ...overrides };

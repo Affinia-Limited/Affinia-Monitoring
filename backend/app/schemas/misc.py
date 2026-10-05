@@ -88,6 +88,8 @@ class LogTarget(BaseModel):
     name: str
     resource_type: str
     type_display_name: str
+    project_id: uuid.UUID | None = None
+    environment_id: uuid.UUID | None = None
     project_name: str | None
     environment_name: str | None
     query_count: int
@@ -131,12 +133,17 @@ class LogQueryOut(BaseModel):
 
 
 class SearchHit(BaseModel):
-    kind: Literal["project", "environment", "resource", "subscription"]
+    kind: Literal["project", "environment", "resource", "alert", "logs", "subscription"]
     id: str
     title: str
     subtitle: str
     url: str
     health_status: str | None = None
+    #: Context so results are unambiguous: where the hit lives.
+    project_name: str | None = None
+    environment_name: str | None = None
+    type_display_name: str | None = None
+    severity: str | None = None
 
 
 class SearchOut(BaseModel):

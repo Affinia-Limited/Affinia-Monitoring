@@ -93,6 +93,8 @@ async def log_targets(db: DbSession, user: LogViewer) -> list[LogTarget]:
             name=r.name,
             resource_type=r.resource_type,
             type_display_name=type_display_name(r.resource_type, r.monitor_key),
+            project_id=r.project_id,
+            environment_id=r.environment_id,
             project_name=lookups.projects[r.project_id].name if r.project_id in lookups.projects else None,
             environment_name=lookups.environments[r.environment_id].name
             if r.environment_id in lookups.environments

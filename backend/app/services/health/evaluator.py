@@ -137,6 +137,7 @@ async def evaluate_resources(
         connection = connections[resource.connection_id]
         monitor = get_monitor(resource.monitor_key)
         reasons: list[dict[str, Any]] = []
+        readings: list[dict[str, Any]] = []
         signals = 0
 
         rh = availability.get(connection.id, {}).get(resource.azure_id)
@@ -173,8 +174,18 @@ async def evaluate_resources(
                 continue
             signals += 1
             severity = classify(value, rule, warning, critical)
+            definition = monitor.metric(rule.metric)
+            readings.append(
+                {
+                    "metric": rule.metric,
+                    "label": definition.label if definition else rule.metric,
+                    "unit": definition.unit if definition else None,
+                    "value": round(value, 3),
+                    "status": severity,
+                    "window_minutes": rule.window_minutes,
+                }
+            )
             if severity != "healthy":
-                definition = monitor.metric(rule.metric)
                 reasons.append(
                     {
                         "signal": "metric",
@@ -198,6 +209,7 @@ async def evaluate_resources(
             status = "unknown"
         resource.health_status = status
         resource.health_reasons = reasons
+        resource.health_metrics = readings
         resource.health_evaluated_at = datetime.now(UTC)
         stats["evaluated"] += 1
         stats[status] += 1

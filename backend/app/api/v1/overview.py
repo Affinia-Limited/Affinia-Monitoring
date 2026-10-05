@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -13,7 +14,16 @@ from app.core.errors import AppError
 from app.core.permissions import Permission
 from app.models import Alert, AzureConnection, Project, Resource, Subscription
 from app.services.monitors.registry import type_display_name
-from app.services.views import alert_views, counts_for, load_lookups, resource_view, worst
+from app.services.views import (
+    ScopeHealth,
+    active_alert_counts_by_environment,
+    active_alert_counts_by_project,
+    alert_views,
+    counts_for,
+    health_by_scope,
+    load_lookups,
+    resource_view,
+)
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
@@ -182,32 +192,47 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
         )
     )
 
+    scopes = await health_by_scope(db, org)
+    project_alerts = await active_alert_counts_by_project(db, org)
+    env_alerts = await active_alert_counts_by_environment(db, org)
+    env_status_counts = {"healthy": 0, "warning": 0, "critical": 0, "unknown": 0}
     project_health = []
     for p in projects:
         envs = []
         for e in p.environments:
-            statuses = [h for pid, eid, h, *_ in monitored if pid == p.id and eid == e.id]
+            scope = scopes.get((p.id, e.id), ScopeHealth())
+            env_status_counts[scope.status] = env_status_counts.get(scope.status, 0) + 1
             envs.append(
                 {
                     "id": str(e.id),
                     "name": e.name,
                     "slug": e.slug,
                     "kind": e.kind,
-                    "status": worst(statuses),
-                    "counts": counts_for(statuses).model_dump(),
+                    "status": scope.status,
+                    "counts": scope.counts.model_dump(),
+                    "active_alerts": env_alerts.get((p.id, e.id), 0),
+                    "last_checked_at": scope.last_checked_at.isoformat() if scope.last_checked_at else None,
                 }
             )
-        statuses = [h for pid, _, h, *_ in monitored if pid == p.id]
+        scope = scopes.get((p.id, None), ScopeHealth())
         project_health.append(
             {
                 "id": str(p.id),
                 "name": p.name,
                 "slug": p.slug,
-                "status": worst(statuses),
-                "counts": counts_for(statuses).model_dump(),
+                "description": p.description,
+                "status": scope.status,
+                "counts": scope.counts.model_dump(),
+                "active_alerts": project_alerts.get(p.id, 0),
+                "last_checked_at": scope.last_checked_at.isoformat() if scope.last_checked_at else None,
                 "environments": envs,
             }
         )
+    last_synced = await db.scalar(
+        select(func.max(AzureConnection.last_sync_at)).where(
+            AzureConnection.organization_id == org, AzureConnection.deleted_at.is_(None)
+        )
+    )
 
     by_type: dict[str, dict[str, Any]] = {}
     for _, _, health, rtype, mkey, _ in monitored:
@@ -258,6 +283,10 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
     feeds = await _azure_feeds(db, azure, user, locations)
     return {
         "is_mock": azure.is_mock,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        #: Environments by their worst monitored-resource status (an empty environment is "unknown").
+        "environment_health": env_status_counts,
         "totals": {
             "projects": len(projects),
             "environments": sum(len(p.environments) for p in projects),

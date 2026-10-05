@@ -153,8 +153,13 @@ async def list_resources(
 
 
 @router.get("/facets", response_model=ResourceFacets)
-async def resource_facets(db: DbSession, user: Viewer, filters: Filters) -> ResourceFacets:
-    base = _apply_filters(_base(user), **filters).subquery()
+async def resource_facets(
+    db: DbSession, user: Viewer, filters: Filters, monitored_only: bool = False
+) -> ResourceFacets:
+    query = _apply_filters(_base(user), **filters)
+    if monitored_only:
+        query = query.where(Resource.monitor_key != "generic")
+    base = query.subquery()
 
     async def facet(column: str) -> list[tuple[str, int]]:
         col = base.c[column]

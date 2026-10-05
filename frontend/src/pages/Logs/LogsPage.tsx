@@ -45,7 +45,7 @@ function KqlEditor({ value, onChange, disabled }: { value: string; onChange: (v:
 
 export function LogsPage() {
   const [params, setParams] = useSearchParams();
-  const { timeRange } = useFilters();
+  const { timeRange, projectId, environmentId, setProject } = useFilters();
   const canKql = usePermission(PERMISSIONS.runKql);
   const targetId = params.get("resource") ?? "";
   const [selected, setSelected] = useState<PredefinedQuery | null>(null);
@@ -54,6 +54,16 @@ export function LogsPage() {
   const [severities, setSeverities] = useState<string[]>([]);
 
   const targets = useQuery({ queryKey: ["log-targets"], queryFn: endpoints.logTargets });
+  // Project / environment context (from the top bar, an environment page or search) narrows the targets.
+  const scopedTargets = (targets.data ?? []).filter(
+    (t) => (!projectId || t.project_id === projectId) && (!environmentId || t.environment_id === environmentId),
+  );
+  const scopeLabel = (() => {
+    const t = (targets.data ?? []).find((x) => x.project_id === projectId);
+    if (!projectId || !t) return null;
+    const env = environmentId ? (targets.data ?? []).find((x) => x.environment_id === environmentId)?.environment_name : null;
+    return [t.project_name, env].filter(Boolean).join(" / ");
+  })();
   const queries = useQuery({
     queryKey: ["log-queries", targetId],
     queryFn: () => endpoints.logQueries(targetId),
@@ -111,7 +121,7 @@ export function LogsPage() {
                 }}
               >
                 <option value="">Select a target</option>
-                {targets.data?.map((t) => (
+                {scopedTargets.map((t) => (
                   <option key={t.resource_id} value={t.resource_id}>
                     {t.name} ({t.type_display_name}
                     {t.environment_name ? `, ${t.environment_name}` : ""})
@@ -119,7 +129,20 @@ export function LogsPage() {
                 ))}
               </Select>
             </Field>
-            {targets.isError ? <ErrorState error={targets.error} compact /> : null}
+            {scopeLabel ? (
+              <p className="flex items-center justify-between gap-2 rounded-md bg-muted px-2.5 py-1.5 text-xs">
+                <span>
+                  Showing <span className="font-medium">{scopeLabel}</span> ({scopedTargets.length})
+                </span>
+                <button type="button" className="text-primary hover:underline" onClick={() => setProject(null)}>
+                  Show all
+                </button>
+              </p>
+            ) : null}
+            {targets.data && scopedTargets.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No resources with log queries in this scope.</p>
+            ) : null}
+            {targets.isError ? <ErrorState error={targets.error} compact title="Unable to load log targets." onRetry={() => void targets.refetch()} /> : null}
             {queries.isLoading ? <LoadingBlock /> : null}
             {grouped.map(([category, items]) => (
               <div key={category}>

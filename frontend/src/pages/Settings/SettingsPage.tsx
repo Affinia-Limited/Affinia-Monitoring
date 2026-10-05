@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Monitor, Moon, Sun } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
 import { KeyValue, PageHeader } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
@@ -273,12 +273,30 @@ function AboutTab() {
   );
 }
 
+const SETTINGS_TABS = ["users", "thresholds", "audit", "appearance", "about"];
+
 export function SettingsPage() {
   const canAudit = usePermission(PERMISSIONS.viewAudit);
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("tab") ?? "users";
+  const tab = SETTINGS_TABS.includes(requested) && (requested !== "audit" || canAudit) ? requested : "users";
   return (
     <>
       <PageHeader title="Settings" />
-      <Tabs defaultValue="users">
+      <Tabs
+        value={tab}
+        onValueChange={(v) =>
+          setParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              if (v === "users") next.delete("tab");
+              else next.set("tab", v);
+              return next;
+            },
+            { replace: true },
+          )
+        }
+      >
         <TabsList aria-label="Settings sections">
           <TabsTrigger value="users">Users and roles</TabsTrigger>
           <TabsTrigger value="thresholds">Health thresholds</TabsTrigger>

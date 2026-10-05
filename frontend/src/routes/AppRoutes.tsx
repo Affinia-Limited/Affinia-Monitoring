@@ -7,6 +7,7 @@ import { OverviewPage } from "@/pages/Dashboard/OverviewPage";
 import { DashboardPage } from "@/pages/Dashboards/DashboardPage";
 import { DashboardsPage } from "@/pages/Dashboards/DashboardsPage";
 import { LogsPage } from "@/pages/Logs/LogsPage";
+import { EnvironmentPage } from "@/pages/Projects/EnvironmentPage";
 import { ProjectDetailPage } from "@/pages/Projects/ProjectDetailPage";
 import { ProjectsPage } from "@/pages/Projects/ProjectsPage";
 import { ResourceByNameRedirect } from "@/pages/Resources/ResourceByNameRedirect";
@@ -36,6 +37,7 @@ export function AppRoutes() {
         <Route index element={<OverviewPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+        <Route path="projects/:projectId/environments/:environmentId" element={<EnvironmentPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="resources/:resourceId" element={<ResourceDetailPage />} />
         <Route path="app-services/:name" element={<ResourceByNameRedirect />} />

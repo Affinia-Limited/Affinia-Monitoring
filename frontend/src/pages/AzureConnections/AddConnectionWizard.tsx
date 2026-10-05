@@ -165,7 +165,7 @@ export function AddConnectionWizard({ open, onOpenChange }: { open: boolean; onO
             }}
           >
             <Field label="Connection name" htmlFor="conn-name">
-              <Input id="conn-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="CRM Production" />
+              <Input id="conn-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Production subscriptions" />
             </Field>
             <Field label="Tenant ID" htmlFor="conn-tenant" error={tenantId && !tenantValid ? "Enter the tenant ID as a GUID." : null}>
               <Input id="conn-tenant" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />

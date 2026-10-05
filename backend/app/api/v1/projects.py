@@ -26,7 +26,12 @@ from app.schemas.projects import (
 )
 from app.services.audit import record_audit
 from app.services.comparison import compare_environments
-from app.services.views import active_alert_counts_by_project, counts_for, worst
+from app.services.views import (
+    ScopeHealth,
+    active_alert_counts_by_environment,
+    active_alert_counts_by_project,
+    health_by_scope,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -46,31 +51,28 @@ async def _get_project(db: DbSession, user: CurrentUser, project_id: uuid.UUID) 
 
 
 async def _project_views(db: DbSession, user: CurrentUser, projects: list[Project]) -> list[ProjectOut]:
-    rows = (
-        await db.execute(
-            select(Resource.project_id, Resource.environment_id, Resource.health_status).where(
-                Resource.organization_id == user.organization_id,
-                Resource.deleted_at.is_(None),
-                Resource.project_id.in_([p.id for p in projects]),
-            )
-        )
-    ).all()
+    """Projects with health of their *monitored* resources (inventory items carry no health signal)."""
+    scopes = await health_by_scope(db, user.organization_id, [p.id for p in projects])
     alerts = await active_alert_counts_by_project(db, user.organization_id)
+    env_alerts = await active_alert_counts_by_environment(db, user.organization_id)
     views = []
     for project in projects:
-        project_statuses = [h for pid, _, h in rows if pid == project.id]
         out = ProjectOut.model_validate(project, from_attributes=True)
         envs = []
         for env in project.environments:
-            statuses = [h for pid, eid, h in rows if pid == project.id and eid == env.id]
+            scope = scopes.get((project.id, env.id), ScopeHealth())
             summary = EnvironmentSummary.model_validate(env, from_attributes=True)
-            summary.health = counts_for(statuses)
-            summary.status = worst(statuses)
+            summary.health = scope.counts
+            summary.status = scope.status
+            summary.active_alerts = env_alerts.get((project.id, env.id), 0)
+            summary.last_checked_at = scope.last_checked_at
             envs.append(summary)
+        project_scope = scopes.get((project.id, None), ScopeHealth())
         out.environments = envs
-        out.health = counts_for(project_statuses)
-        out.status = worst(project_statuses)
+        out.health = project_scope.counts
+        out.status = project_scope.status
         out.active_alerts = alerts.get(project.id, 0)
+        out.last_checked_at = project_scope.last_checked_at
         views.append(out)
     return views
 

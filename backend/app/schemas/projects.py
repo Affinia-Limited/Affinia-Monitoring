@@ -81,6 +81,9 @@ class HealthCounts(BaseModel):
 class EnvironmentSummary(EnvironmentOut):
     health: HealthCounts = HealthCounts()
     status: str = "unknown"
+    active_alerts: int = 0
+    #: Most recent health evaluation of any monitored resource in the environment.
+    last_checked_at: datetime | None = None
 
 
 class ProjectOut(ORMModel):
@@ -94,3 +97,4 @@ class ProjectOut(ORMModel):
     health: HealthCounts = HealthCounts()
     status: str = "unknown"
     active_alerts: int = 0
+    last_checked_at: datetime | None = None

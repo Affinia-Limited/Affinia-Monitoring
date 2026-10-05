@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { endpoints } from "@/api/endpoints";
-import { HealthBadge } from "@/components/status";
+import { Breadcrumbs, type Crumb } from "@/components/Breadcrumbs";
+import { formatReading } from "@/components/resourceSignals";
+import { HealthBadge, TimeAgo } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Field, Select } from "@/components/ui/form";
@@ -15,7 +17,54 @@ import { HealthReasons } from "@/components/widgets/ResourceWidgets";
 import { AlertTableWidget } from "@/components/widgets/ResourceWidgets";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import type { ResourceDetail } from "@/types/api";
+import { cn } from "@/utils/cn";
 import { formatDateTime, formatRelative, regionName, titleCase } from "@/utils/format";
+import { paths } from "@/utils/paths";
+
+/** Where this resource lives: Projects / CRM / Production / App Service / name. */
+function resourceCrumbs(r: ResourceDetail): Crumb[] {
+  if (r.project_id && r.project_name) {
+    const crumbs: Crumb[] = [
+      { label: "Projects", to: paths.projects() },
+      { label: r.project_name, to: paths.project(r.project_id) },
+    ];
+    if (r.environment_id && r.environment_name) {
+      crumbs.push({ label: r.environment_name, to: paths.environment(r.project_id, r.environment_id) });
+      crumbs.push({ label: r.type_display_name, to: paths.environment(r.project_id, r.environment_id, "resources") });
+    } else {
+      crumbs.push({ label: r.type_display_name });
+    }
+    return [...crumbs, { label: r.name }];
+  }
+  return [{ label: "Resources", to: "/resources" }, { label: "Unassigned", to: "/resources?view=unassigned" }, { label: r.name }];
+}
+
+const READING_TONE: Record<string, string> = { critical: "text-critical", warning: "text-warning" };
+
+/** The type-specific health metrics from the last evaluation: the numbers that decide this resource's status. */
+function KeyMetrics({ resource }: { resource: ResourceDetail }) {
+  const readings = resource.health_metrics ?? [];
+  if (!readings.length) return null;
+  return (
+    <section aria-label="Key metrics" className="mb-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {readings.slice(0, 6).map((m) => (
+          <div key={m.metric} className="rounded-lg border border-border bg-card px-4 py-3">
+            <p className="truncate text-xs text-muted-foreground" title={m.label}>
+              {m.label}
+            </p>
+            <p className={cn("tabular mt-1 text-xl font-semibold", READING_TONE[m.status] ?? "")}>{formatReading(m)}</p>
+            {m.status !== "healthy" ? <p className={cn("text-xs capitalize", READING_TONE[m.status] ?? "text-muted-foreground")}>{m.status}</p> : null}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        From the last health check {resource.health_evaluated_at ? <TimeAgo value={resource.health_evaluated_at} /> : "(not yet run)"}, averaged over each rule's window. Live
+        charts are in the dashboard below.
+      </p>
+    </section>
+  );
+}
 
 function AssignmentEditor({ resource }: { resource: ResourceDetail }) {
   const qc = useQueryClient();
@@ -151,7 +200,9 @@ export function ResourceDetailPage() {
   });
 
   if (resource.isLoading) return <LoadingBlock label="Loading resource" />;
-  if (resource.isError || !resource.data) return <ErrorState error={resource.error} />;
+  if (resource.isError || !resource.data) {
+    return <ErrorState error={resource.error} title="Unable to load this resource." onRetry={() => void resource.refetch()} />;
+  }
   const r = resource.data;
 
   const extraTabs = [
@@ -226,6 +277,7 @@ export function ResourceDetailPage() {
 
   return (
     <>
+      <Breadcrumbs items={resourceCrumbs(r)} />
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -256,6 +308,7 @@ export function ResourceDetailPage() {
         </div>
       </div>
       {evaluate.isError ? <ErrorState error={evaluate.error} compact className="mb-4" /> : null}
+      <KeyMetrics resource={r} />
       {dashboard.isError && !(dashboard.error instanceof ApiError && dashboard.error.status === 404) ? (
         <ErrorState error={dashboard.error} className="mb-4" />
       ) : null}

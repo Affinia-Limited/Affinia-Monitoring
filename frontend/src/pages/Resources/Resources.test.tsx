@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { sortResources } from "@/components/ResourcesTable";
-import { resource as base, viewer } from "@/test/fixtures";
+import { resource as base, project as makeProject, viewer } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 import { server } from "@/test/server";
 import type { HealthStatus, Project, Resource } from "@/types/api";
@@ -16,20 +16,7 @@ function res(id: string, name: string, health: HealthStatus): Resource {
 
 const items = [res("1", "b-healthy", "healthy"), res("2", "a-warning", "warning"), res("3", "c-critical", "critical"), res("4", "d-unknown", "unknown")];
 
-const project: Project = {
-  id: "p1",
-  name: "CRM",
-  slug: "crm",
-  description: "",
-  tag_values: [],
-  created_at: "2026-09-30T10:00:00Z",
-  status: "healthy",
-  active_alerts: 0,
-  health: { healthy: 0, warning: 0, critical: 0, unknown: 0, total: 0 },
-  environments: [
-    { id: "e1", project_id: "p1", name: "Production", slug: "prod", kind: "production", sort_order: 0, tag_values: [], status: "healthy", health: { healthy: 0, warning: 0, critical: 0, unknown: 0, total: 0 } },
-  ],
-};
+const project: Project = makeProject({ name: "CRM", slug: "crm" });
 
 function resourceHandlers() {
   return [
@@ -92,12 +79,16 @@ describe("Resources page", () => {
 });
 
 describe("Overview", () => {
-  it("leads with what needs attention", async () => {
+  it("greets the user, summarises environments and leads with what needs attention", async () => {
     server.use(
-      http.get("*/api/v1/azure/connections", () => HttpResponse.json([])),
+      http.get("*/api/v1/auth/me", () => HttpResponse.json({ ...viewer, display_name: "Aditya Kumar" })),
+      http.get("*/api/v1/projects", () => HttpResponse.json([])),
       http.get("*/api/v1/overview", () =>
         HttpResponse.json({
           is_mock: false,
+          generated_at: "2026-10-06T10:00:00Z",
+          last_synced_at: null,
+          environment_health: { healthy: 9, warning: 2, critical: 1, unknown: 0 },
           totals: { projects: 1, environments: 1, subscriptions: 1, connections: 1, resources: 288, monitored_resources: 74, inventory_resources: 214, unassigned_resources: 3 },
           health: { healthy: 72, warning: 2, critical: 0, unknown: 0, total: 74 },
           needs_attention: [
@@ -114,9 +105,14 @@ describe("Overview", () => {
       ),
     );
     renderWithProviders(<OverviewPage />);
-    expect(await screen.findByRole("heading", { name: /2 resources need attention/ })).toBeInTheDocument();
-    expect(screen.getByText("+214 inventory")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /, Aditya$/ })).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: "Status summary" });
+    expect(within(summary).getByText("Warnings").parentElement?.parentElement).toHaveTextContent("2");
+    expect(within(summary).getByText("Critical").parentElement?.parentElement).toHaveTextContent("1");
+    expect(screen.getByText(/Azure data synchronised/)).toHaveTextContent("not yet");
     expect(screen.getByRole("link", { name: "afd-crm-prod-uks" })).toHaveAttribute("href", "/resources/r9");
+    expect(screen.getByRole("link", { name: "Review unassigned resources" })).toBeInTheDocument();
+    expect(await screen.findByText("No projects yet")).toBeInTheDocument();
     expect(screen.getByText("5xx rate 1.75%, above 1%")).toBeInTheDocument();
     expect(screen.getByText("No active alerts.")).toBeInTheDocument();
   });
