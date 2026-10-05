@@ -19,7 +19,7 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
     VITE_ENTRA_REDIRECT_URI=$VITE_ENTRA_REDIRECT_URI
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
 # Upstream for /api, /health, /ready, /live. Override at runtime (e.g. the Container Apps internal FQDN).
 ENV BACKEND_UPSTREAM=http://backend:8000
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
