@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "amp-prod" },
+    "entraTenantId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "entraClientId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "entraAudience": { "value": "api://00000000-0000-0000-0000-000000000000" },
+    "postgresAdminGroupObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "postgresAdminGroupName": { "value": "sg-monitoring-postgres-admins" },
+    "bootstrapSuperAdminOids": { "value": [ "00000000-0000-0000-0000-000000000000" ] },
+    "customDomain": { "value": "" },
+    "deployApps": { "value": false },
+    "imageTag": { "value": "latest" }
+  }
+}

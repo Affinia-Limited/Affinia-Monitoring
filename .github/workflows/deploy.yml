@@ -1,0 +1,157 @@
+name: Deploy
+
+# Deploys to Azure with GitHub OIDC federation (azure/login). No client secret exists anywhere:
+# the federated credential on the deployment app registration trusts this repository's
+# "production" environment. All identifiers below are GitHub *environment variables* (not secrets);
+# they are not sensitive, but keeping them out of the repo keeps the code tenant-agnostic.
+#
+# Required environment variables (Settings > Environments > production > Variables):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   deployment identity (OIDC)
+#   AZURE_RESOURCE_GROUP, AZURE_LOCATION, NAME_PREFIX
+#   ENTRA_TENANT_ID, ENTRA_API_CLIENT_ID, ENTRA_AUDIENCE       API token validation
+#   ENTRA_SPA_CLIENT_ID, ENTRA_API_SCOPE                       SPA sign-in (public values)
+#   POSTGRES_ADMIN_GROUP_OBJECT_ID, POSTGRES_ADMIN_GROUP_NAME
+#   BOOTSTRAP_SUPER_ADMIN_OIDS   JSON array, e.g. ["<object-id>"]
+#   CUSTOM_DOMAIN                optional
+#   SPA_REDIRECT_URI             optional, defaults to the app origin
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource group
+        run: az group create --name "$RG" --location "${{ vars.AZURE_LOCATION }}" --output none
+
+      - name: Write deployment parameters
+        run: |
+          cat > params.json <<JSON
+          {
+            "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+            "contentVersion": "1.0.0.0",
+            "parameters": {
+              "namePrefix": { "value": "${{ vars.NAME_PREFIX }}" },
+              "entraTenantId": { "value": "${{ vars.ENTRA_TENANT_ID }}" },
+              "entraClientId": { "value": "${{ vars.ENTRA_API_CLIENT_ID }}" },
+              "entraAudience": { "value": "${{ vars.ENTRA_AUDIENCE }}" },
+              "postgresAdminGroupObjectId": { "value": "${{ vars.POSTGRES_ADMIN_GROUP_OBJECT_ID }}" },
+              "postgresAdminGroupName": { "value": "${{ vars.POSTGRES_ADMIN_GROUP_NAME }}" },
+              "bootstrapSuperAdminOids": { "value": ${{ vars.BOOTSTRAP_SUPER_ADMIN_OIDS || '[]' }} },
+              "customDomain": { "value": "${{ vars.CUSTOM_DOMAIN }}" },
+              "imageTag": { "value": "${{ github.sha }}" }
+            }
+          }
+          JSON
+
+      - name: Deploy foundation (phase 1)
+        id: foundation
+        run: |
+          az deployment group create \
+            --resource-group "$RG" \
+            --name "foundation-${{ github.run_number }}" \
+            --template-file infra/main.bicep \
+            --parameters @params.json deployApps=false \
+            --output none
+          echo "acr=$(az deployment group show -g "$RG" -n "foundation-${{ github.run_number }}" \
+            --query properties.outputs.registryName.value -o tsv)" >> "$GITHUB_OUTPUT"
+          echo "login_server=$(az deployment group show -g "$RG" -n "foundation-${{ github.run_number }}" \
+            --query properties.outputs.registryLoginServer.value -o tsv)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ACR
+        run: az acr login --name "${{ steps.foundation.outputs.acr }}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ steps.foundation.outputs.login_server }}/monitoring-backend:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push worker
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/worker.Dockerfile
+          push: true
+          tags: ${{ steps.foundation.outputs.login_server }}/monitoring-worker:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ steps.foundation.outputs.login_server }}/monitoring-frontend:${{ env.IMAGE_TAG }}
+          build-args: |
+            VITE_API_BASE_URL=/api/v1
+            VITE_AUTH_MODE=entra
+            VITE_ENTRA_CLIENT_ID=${{ vars.ENTRA_SPA_CLIENT_ID }}
+            VITE_ENTRA_TENANT_ID=${{ vars.ENTRA_TENANT_ID }}
+            VITE_ENTRA_API_SCOPE=${{ vars.ENTRA_API_SCOPE }}
+            VITE_ENTRA_REDIRECT_URI=${{ vars.SPA_REDIRECT_URI }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Run database migrations with the new image (existing deployments)
+        run: |
+          JOB="${{ vars.NAME_PREFIX }}-migrate"
+          if az containerapp job show -g "$RG" -n "$JOB" --output none 2>/dev/null; then
+            az containerapp job update -g "$RG" -n "$JOB" \
+              --image "${{ steps.foundation.outputs.login_server }}/monitoring-backend:${IMAGE_TAG}" --output none
+            bash scripts/run-migration-job.sh "$RG" "$JOB"
+          else
+            echo "Migration job not created yet (first deployment); it runs after phase 2."
+          fi
+
+      - name: Deploy applications (phase 2)
+        run: |
+          az deployment group create \
+            --resource-group "$RG" \
+            --name "apps-${{ github.run_number }}" \
+            --template-file infra/main.bicep \
+            --parameters @params.json deployApps=true \
+            --output none
+          az deployment group show -g "$RG" -n "apps-${{ github.run_number }}" \
+            --query "properties.outputs.frontDoorHostName.value" -o tsv
+
+      - name: Ensure migrations are at head
+        run: bash scripts/run-migration-job.sh "$RG" "${{ vars.NAME_PREFIX }}-migrate"
+
+      - name: Clean up
+        if: always()
+        run: rm -f params.json

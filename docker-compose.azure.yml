@@ -1,0 +1,33 @@
+# Override for running the local stack against REAL Azure and Microsoft Entra ID.
+#
+#   az login --tenant <tenant-id>          # your developer identity, needs Reader + Monitoring Reader
+#   docker compose -f docker-compose.yml -f docker-compose.azure.yml up --build
+#
+# Credentials: the backend uses DefaultAzureCredential. In development it can use the Azure CLI
+# sign-in, so ~/.azure is mounted READ-ONLY. No client secret is used or needed.
+# NOTE: the Azure CLI must be available inside the container for AzureCliCredential; if it is not,
+# run the backend on the host instead (scripts/dev.ps1 local / scripts/dev.sh local), which uses
+# your host's `az login` directly.
+#
+# Required in .env (placeholders in .env.example): ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_AUDIENCE,
+# AZURE_TENANT_ID, VITE_ENTRA_CLIENT_ID, VITE_ENTRA_TENANT_ID, VITE_ENTRA_API_SCOPE.
+
+x-azure-env: &azure-env
+  AUTH_MODE: entra
+  AZURE_PROVIDER: azure
+
+services:
+  backend:
+    environment: *azure-env
+    volumes:
+      - ${HOME:-~}/.azure:/app/.azure:ro
+  worker:
+    environment: *azure-env
+    volumes:
+      - ${HOME:-~}/.azure:/app/.azure:ro
+  beat:
+    environment: *azure-env
+  frontend:
+    build:
+      args:
+        VITE_AUTH_MODE: entra
