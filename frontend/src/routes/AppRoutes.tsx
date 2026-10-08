@@ -6,6 +6,7 @@ import { AzureConnectionsPage } from "@/pages/AzureConnections/AzureConnectionsP
 import { OverviewPage } from "@/pages/Dashboard/OverviewPage";
 import { DashboardPage } from "@/pages/Dashboards/DashboardPage";
 import { DashboardsPage } from "@/pages/Dashboards/DashboardsPage";
+import { LivePage } from "@/pages/Live/LivePage";
 import { LogsPage } from "@/pages/Logs/LogsPage";
 import { EnvironmentPage } from "@/pages/Projects/EnvironmentPage";
 import { ProjectDetailPage } from "@/pages/Projects/ProjectDetailPage";
@@ -35,6 +36,7 @@ export function AppRoutes() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<OverviewPage />} />
+        <Route path="live" element={<LivePage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:projectId" element={<ProjectDetailPage />} />
         <Route path="projects/:projectId/environments/:environmentId" element={<EnvironmentPage />} />

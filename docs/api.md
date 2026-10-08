@@ -56,6 +56,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 | Method | Path | Permission | Notes |
 | --- | --- | --- | --- |
 | GET | `/overview` | `dashboards:view` | Totals, resource health counts, `environment_health` (environments by worst status), alerts, per-project and per-environment health with `active_alerts` and `last_checked_at`, recent alerts, resource types, Service Health, recent changes, feed errors, `generated_at` and `last_synced_at` |
+| GET | `/live?project_id=&environment_id=` | `dashboards:view` | Used by the Live page, which polls every 15 seconds. Stored health counts, open alerts by severity, per-environment status, the 8 newest open alerts, and up to 24 monitored resources (worst health first) with up to 3 health-rule metrics each: the last 60 minutes at 1-minute granularity, the latest value, the rule's window value and its status against the thresholds (organisation overrides applied). The window is aligned to the minute, so concurrent viewers share one cached Azure Monitor read per metric per minute. `resources_total` is the number of monitored resources in scope |
 | GET | `/search?q=&limit=` | `resources:view` | Projects, environments, resources (name, resource group, type, region, friendly type names), open alerts, log shortcuts and subscriptions. Compound terms such as `crm-prod` match a project plus its environment. Every hit carries `project_name`, `environment_name` and `type_display_name` where relevant |
 
 ## Projects

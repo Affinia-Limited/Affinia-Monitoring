@@ -658,3 +658,66 @@ export interface Overview {
   }[];
   feed_errors: { connection: string; code: string; message: string }[];
 }
+
+/** One health-rule metric on the Live page: the last hour at 1-minute resolution. */
+export interface LiveMetric {
+  key: string;
+  label: string;
+  unit: string;
+  /** Most recent non-empty minute. */
+  latest: number | null;
+  latest_at: string | null;
+  /** The health rule's window reduced the same way health evaluation does (e.g. 15-minute average). */
+  window_value: number | null;
+  window_minutes: number;
+  reducer: "avg" | "sum" | "max" | "min";
+  operator: Operator;
+  warning: number | null;
+  critical: number | null;
+  /** ``window_value`` against the thresholds; ``unknown`` when there is no data. */
+  status: HealthStatus;
+  points: { timestamp: string; value: number | null }[];
+  unavailable_reason: string | null;
+}
+
+export interface LiveResource {
+  id: string;
+  name: string;
+  type_display_name: string;
+  project_id: string | null;
+  project_name: string | null;
+  environment_id: string | null;
+  environment_name: string | null;
+  health_status: HealthStatus;
+  health_evaluated_at: string | null;
+  active_alerts: number;
+  metrics: LiveMetric[];
+}
+
+export interface LiveEnvironment {
+  project_id: string;
+  project_name: string;
+  environment_id: string;
+  environment_name: string;
+  kind: string;
+  status: HealthStatus;
+  counts: HealthCounts;
+  active_alerts: number;
+  last_checked_at: string | null;
+}
+
+export interface Live {
+  is_mock: boolean;
+  generated_at: string;
+  window_minutes: number;
+  interval_seconds: number;
+  /** Monitored resources in scope by stored health status. */
+  health: HealthCounts;
+  alerts: { active: number; by_severity: Partial<Record<Severity, number>> };
+  environments: LiveEnvironment[];
+  /** Worst health first, at most 24. */
+  resources: LiveResource[];
+  /** All monitored resources in scope (``resources`` may be a subset). */
+  resources_total: number;
+  recent_alerts: Alert[];
+}

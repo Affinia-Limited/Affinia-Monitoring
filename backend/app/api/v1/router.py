@@ -7,6 +7,7 @@ from app.api.v1 import (
     auth,
     azure_connections,
     dashboards,
+    live,
     logs,
     overview,
     projects,
@@ -26,5 +27,5 @@ _ERRORS = {
 }
 
 api_router = APIRouter(prefix="/api/v1", responses=_ERRORS)  # type: ignore[arg-type]
-for module in (auth, overview, projects, azure_connections, resources, dashboards, logs, alerts, search, users):
+for module in (auth, overview, live, projects, azure_connections, resources, dashboards, logs, alerts, search, users):
     api_router.include_router(module.router)

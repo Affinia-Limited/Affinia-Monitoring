@@ -17,6 +17,7 @@ import type {
   HealthRule,
   LogQueryIn,
   LogQueryResult,
+  Live,
   LogTarget,
   Me,
   MetricDefinition,
@@ -52,6 +53,7 @@ export const endpoints = {
   startSession: () => send<Me>("post", "/auth/session"),
 
   overview: () => get<Overview>("/overview"),
+  live: (params: Params) => get<Live>("/live", params),
   search: (q: string) => get<SearchResult>("/search", { q }),
 
   projects: () => get<Project[]>("/projects"),

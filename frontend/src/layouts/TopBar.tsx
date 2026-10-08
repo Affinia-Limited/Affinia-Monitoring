@@ -157,10 +157,13 @@ function UserMenu() {
 
 /** Pages whose URL already fixes the project/environment show breadcrumbs instead of the global pickers. */
 const CONTEXT_ROUTES = [/^\/projects\/[^/]+/, /^\/resources\/[^/]+/, /^\/dashboards\/[^/]+/, /^\/settings/, /^\/azure-connections/];
+/** Pages with a fixed time window (Live always shows the last hour). */
+const FIXED_WINDOW_ROUTES = [/^\/live$/];
 
 export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: () => void; onOpenMobileNav: () => void }) {
   const { pathname } = useLocation();
   const contextKnown = CONTEXT_ROUTES.some((r) => r.test(pathname));
+  const fixedWindow = FIXED_WINDOW_ROUTES.some((r) => r.test(pathname));
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-card/95 px-3 backdrop-blur md:px-4">
       <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Open navigation" onClick={onOpenMobileNav}>
@@ -173,7 +176,7 @@ export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: 
       <div className="ml-auto flex items-center gap-1.5">
         <ModePills />
         {contextKnown ? null : <ProjectEnvironmentSelect />}
-        <TimeRangePicker />
+        {fixedWindow ? null : <TimeRangePicker />}
         <Notifications />
         <ThemeMenu />
         <UserMenu />

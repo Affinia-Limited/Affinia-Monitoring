@@ -16,6 +16,7 @@ describe("Sidebar", () => {
     renderWithProviders(<Sidebar collapsed={false} />);
     expect(await screen.findByText("Viewer")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Live" })).toHaveAttribute("href", "/live");
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Audit log" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();

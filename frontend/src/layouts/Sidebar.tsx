@@ -8,6 +8,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   LayoutGrid,
+  Radio,
   ScrollText,
   Search,
   Settings,
@@ -98,6 +99,7 @@ export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavig
 
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
         <Item to="/" end icon={<LayoutDashboard />} label="Overview" collapsed={collapsed} />
+        <Item to="/live" icon={<Radio />} label="Live" collapsed={collapsed} />
         <Item to={paths.projects()} end icon={<FolderKanban />} label="Projects" collapsed={collapsed} />
         {!collapsed && allProjects.length > 0 ? (
           <ul className="mb-1 ml-4 border-l border-border pl-2" aria-label="Projects">

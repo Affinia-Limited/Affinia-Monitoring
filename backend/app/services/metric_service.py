@@ -8,7 +8,9 @@ App Service Plan), applies caching, and returns a provider-neutral structure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -133,6 +135,57 @@ class MetricService:
             await cache.set(key, _result_to_cache(result), self._settings.cache_ttl_metrics)
         return result
 
+    async def _prepare(
+        self, resource: Resource, key: str, interval: timedelta
+    ) -> tuple[MetricData, MetricDef, Resource | None, timedelta]:
+        """Resolve a metric key to its definition and target resource (database work only)."""
+        monitor = get_monitor(resource.monitor_key)
+        definition = monitor.metric(key)
+        if definition is None:
+            raise NotFoundError(f"Metric '{key}' is not defined for {monitor.display_name}.", code="METRIC_NOT_FOUND")
+        metric_interval = interval
+        if definition.min_interval_minutes:
+            metric_interval = max(interval, timedelta(minutes=definition.min_interval_minutes))
+        data = MetricData(
+            key=key,
+            label=definition.label,
+            unit=definition.unit,
+            aggregation=definition.aggregation,
+            interval_seconds=int(metric_interval.total_seconds()),
+        )
+        target = await self._target(resource, definition)
+        if target is None:
+            data.unavailable_reason = "RELATED_RESOURCE_NOT_FOUND"
+            data.unavailable_message = "The related resource for this metric has not been discovered."
+        else:
+            data.source_resource_id = str(target.id)
+        return data, definition, target, metric_interval
+
+    async def _complete(
+        self,
+        data: MetricData,
+        definition: MetricDef,
+        tenant_id: str,
+        target: Resource,
+        time_range: TimeRange,
+        interval: timedelta,
+    ) -> None:
+        """Fetch a prepared metric from Azure (or the cache); no database access."""
+        try:
+            result = await self._fetch(tenant_id, target, definition, time_range, interval)
+        except AppError as exc:
+            # One unavailable metric must not break a whole dashboard.
+            data.unavailable_reason = exc.code
+            data.unavailable_message = exc.message
+            return
+        if result is None or not result.series:
+            data.unavailable_reason = "NO_DATA"
+            data.unavailable_message = "Azure returned no data for this metric."
+        else:
+            data.series = _normalise(definition, result)
+            data.summary = _summarise(data.series)
+            data.is_mock = result.is_mock
+
     async def get_metrics(
         self,
         resource: Resource,
@@ -141,49 +194,42 @@ class MetricService:
         time_range: TimeRange,
         interval: timedelta | None = None,
     ) -> list[MetricData]:
-        monitor = get_monitor(resource.monitor_key)
         interval = interval or time_range.auto_interval()
         output: list[MetricData] = []
         for key in keys:
-            definition = monitor.metric(key)
-            if definition is None:
-                raise NotFoundError(
-                    f"Metric '{key}' is not defined for {monitor.display_name}.", code="METRIC_NOT_FOUND"
-                )
-            metric_interval = interval
-            if definition.min_interval_minutes:
-                metric_interval = max(interval, timedelta(minutes=definition.min_interval_minutes))
-            data = MetricData(
-                key=key,
-                label=definition.label,
-                unit=definition.unit,
-                aggregation=definition.aggregation,
-                interval_seconds=int(metric_interval.total_seconds()),
-            )
-            target = await self._target(resource, definition)
-            if target is None:
-                data.unavailable_reason = "RELATED_RESOURCE_NOT_FOUND"
-                data.unavailable_message = "The related resource for this metric has not been discovered."
-                output.append(data)
-                continue
-            data.source_resource_id = str(target.id)
-            try:
-                result = await self._fetch(tenant_id, target, definition, time_range, metric_interval)
-            except AppError as exc:
-                # One unavailable metric must not break a whole dashboard.
-                data.unavailable_reason = exc.code
-                data.unavailable_message = exc.message
-                output.append(data)
-                continue
-            if result is None or not result.series:
-                data.unavailable_reason = "NO_DATA"
-                data.unavailable_message = "Azure returned no data for this metric."
-            else:
-                data.series = _normalise(definition, result)
-                data.summary = _summarise(data.series)
-                data.is_mock = result.is_mock
+            data, definition, target, metric_interval = await self._prepare(resource, key, interval)
+            if target is not None:
+                await self._complete(data, definition, tenant_id, target, time_range, metric_interval)
             output.append(data)
         return output
+
+    async def get_metrics_many(
+        self,
+        requests: Sequence[tuple[Resource, str, list[str]]],
+        time_range: TimeRange,
+        interval: timedelta,
+        concurrency: int = 8,
+    ) -> list[list[MetricData]]:
+        """``get_metrics`` for many ``(resource, tenant_id, keys)`` at once.
+
+        Related-resource lookups run one at a time on the shared session; the Azure
+        calls then run concurrently, at most ``concurrency`` in flight.
+        """
+        prepared: list[list[tuple[str, MetricData, MetricDef, Resource | None, timedelta]]] = []
+        for resource, tenant_id, keys in requests:
+            prepared.append([(tenant_id, *await self._prepare(resource, key, interval)) for key in keys])
+        gate = asyncio.Semaphore(concurrency)
+
+        async def run(
+            tenant_id: str, data: MetricData, definition: MetricDef, target: Resource | None, step: timedelta
+        ) -> None:
+            if target is None:
+                return
+            async with gate:
+                await self._complete(data, definition, tenant_id, target, time_range, step)
+
+        await asyncio.gather(*(run(*item) for group in prepared for item in group))
+        return [[item[1] for item in group] for group in prepared]
 
     async def window_value(
         self, resource: Resource, tenant_id: str, key: str, window_minutes: int, reducer: Rollup
