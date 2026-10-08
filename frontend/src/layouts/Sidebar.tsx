@@ -8,7 +8,6 @@ import {
   FolderKanban,
   LayoutDashboard,
   LayoutGrid,
-  Radio,
   ScrollText,
   Search,
   Settings,
@@ -18,7 +17,9 @@ import { type ReactNode, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
 import { HealthDot } from "@/components/status";
+import { useWithFilters } from "@/hooks/useFilterSearch";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
+import { useRefreshInterval } from "@/stores/live";
 import { cn } from "@/utils/cn";
 import { titleCase } from "@/utils/format";
 import { paths } from "@/utils/paths";
@@ -68,18 +69,20 @@ function SectionLabel({ collapsed, children }: { collapsed: boolean; children: s
 const PROJECT_LIMIT = 8;
 
 export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
-  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects });
+  const refetchInterval = useRefreshInterval(60_000);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval });
   // Same query key as the top-bar bell, so this adds no request.
   const openAlerts = useQuery({
     queryKey: ["alerts", { status: "open", bell: true }],
     queryFn: () => endpoints.alerts({ status: "open", page_size: 1 }),
-    refetchInterval: 60_000,
+    refetchInterval,
   });
   const { data: me } = useMe();
   const canLogs = usePermission(PERMISSIONS.viewLogs);
   const canManageUsers = usePermission(PERMISSIONS.manageUsers);
   const canAudit = usePermission(PERMISSIONS.viewAudit);
   const [showAll, setShowAll] = useState(false);
+  const withFilters = useWithFilters();
   const allProjects = projects.data ?? [];
   const visibleProjects = showAll ? allProjects : allProjects.slice(0, PROJECT_LIMIT);
 
@@ -98,9 +101,8 @@ export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavig
       </div>
 
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
-        <Item to="/" end icon={<LayoutDashboard />} label="Overview" collapsed={collapsed} />
-        <Item to="/live" icon={<Radio />} label="Live" collapsed={collapsed} />
-        <Item to={paths.projects()} end icon={<FolderKanban />} label="Projects" collapsed={collapsed} />
+        <Item to={withFilters("/")} end icon={<LayoutDashboard />} label="Overview" collapsed={collapsed} />
+        <Item to={withFilters(paths.projects())} end icon={<FolderKanban />} label="Projects" collapsed={collapsed} />
         {!collapsed && allProjects.length > 0 ? (
           <ul className="mb-1 ml-4 border-l border-border pl-2" aria-label="Projects">
             {visibleProjects.map((p) => (
@@ -135,10 +137,10 @@ export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavig
             ) : null}
           </ul>
         ) : null}
-        <Item to="/alerts" icon={<Bell />} label="Alerts" collapsed={collapsed} badge={openAlerts.data?.total} />
-        <Item to="/resources" icon={<Boxes />} label="Resources" collapsed={collapsed} />
-        <Item to="/dashboards" icon={<LayoutGrid />} label="Dashboards" collapsed={collapsed} />
-        {canLogs ? <Item to="/logs" icon={<ScrollText />} label="Logs" collapsed={collapsed} /> : null}
+        <Item to={withFilters("/alerts")} icon={<Bell />} label="Alerts" collapsed={collapsed} badge={openAlerts.data?.total} />
+        <Item to={withFilters("/resources")} icon={<Boxes />} label="Resources" collapsed={collapsed} />
+        <Item to={withFilters("/dashboards")} icon={<LayoutGrid />} label="Dashboards" collapsed={collapsed} />
+        {canLogs ? <Item to={withFilters("/logs")} icon={<ScrollText />} label="Logs" collapsed={collapsed} /> : null}
         <button
           type="button"
           title={collapsed ? "Search (Ctrl K)" : undefined}

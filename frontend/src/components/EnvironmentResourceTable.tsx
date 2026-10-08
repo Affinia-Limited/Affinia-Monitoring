@@ -1,11 +1,14 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Columns3, Search } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
+import { useRefreshInterval } from "@/stores/live";
 import { FilterChips } from "@/components/FilterChips";
 import { HealthText } from "@/components/health";
+import { LiveMark, LiveMetricInline, liveKeyMetric } from "@/components/live";
 import { formatReading, keyReading } from "@/components/resourceSignals";
+import { sortResources } from "@/components/ResourcesTable";
 import { TimeAgo } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,6 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import type { Resource } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { regionName } from "@/utils/format";
@@ -81,14 +85,23 @@ export function EnvironmentResourceTable({
     resource_type: type || undefined,
     monitored_only: !includeInventory,
   };
+  const refetchInterval = useRefreshInterval(60_000);
   const query = useQuery({
     queryKey: ["resources", { ...filters, page }],
     queryFn: () => endpoints.resources({ ...filters, page, page_size: PAGE_SIZE, sort: "health" }),
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000,
+    refetchInterval,
   });
+  const { live, byId } = useLiveResources((query.data?.items ?? []).map((r) => r.id));
+  // The server orders by the last health check; while Live is on, order this page by live status.
+  const items = query.data?.items ?? [];
+  const rows = live ? sortResources(items, "health", (r) => byId[r.id]?.status ?? r.health_status) : items;
   const counts = Object.fromEntries((facets.data?.health ?? []).map((h) => [h.value, h.count]));
   const pages = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE));
+  // When the total shrinks (alerts resolved, filters changed elsewhere), never strand the user on an empty page.
+  useEffect(() => {
+    if (query.data && page > pages) setPage(pages);
+  }, [query.data, page, pages]);
   const shown = OPTIONAL_COLUMNS.filter((c) => columns.includes(c.key));
   const toggleColumn = (key: OptionalColumn) => {
     const next = columns.includes(key) ? columns.filter((c) => c !== key) : [...columns, key];
@@ -145,6 +158,9 @@ export function EnvironmentResourceTable({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {live ? (
+          <p className="text-xs text-muted-foreground">Status filters and counts are as of the last health check; the rows show live status.</p>
+        ) : null}
         <FilterChips<HealthFilter>
           label="Filter by status"
           value={health}
@@ -188,15 +204,17 @@ export function EnvironmentResourceTable({
                       {c.label}
                     </TH>
                   ))}
-                  <TH scope="col">Last checked</TH>
+                  <TH scope="col">{live ? "Updated" : "Last checked"}</TH>
                   <TH scope="col" className="text-right">
                     <span className="sr-only">Action</span>
                   </TH>
                 </TR>
               </THead>
               <tbody>
-                {query.data?.items.map((r) => {
+                {rows.map((r) => {
                   const reading = keyReading(r);
+                  const state = byId[r.id];
+                  const liveMetric = liveKeyMetric(state);
                   return (
                     <TR key={r.id} className="hover:bg-muted/40">
                       <TD className="max-w-72">
@@ -206,10 +224,12 @@ export function EnvironmentResourceTable({
                       </TD>
                       <TD className="whitespace-nowrap text-muted-foreground">{r.type_display_name}</TD>
                       <TD>
-                        <HealthText status={r.health_status} />
+                        <HealthText status={state?.status ?? r.health_status} />
                       </TD>
                       <TD className="whitespace-nowrap">
-                        {reading ? (
+                        {liveMetric ? (
+                          <LiveMetricInline metric={liveMetric} />
+                        ) : reading ? (
                           <span className={cn(reading.status === "critical" ? "text-critical" : reading.status === "warning" ? "text-warning" : "")}>
                             <span className="text-muted-foreground">{reading.label} </span>
                             <span className="tabular font-medium">{formatReading(reading)}</span>
@@ -225,7 +245,7 @@ export function EnvironmentResourceTable({
                         </TD>
                       ))}
                       <TD className="whitespace-nowrap text-muted-foreground">
-                        <TimeAgo value={r.health_evaluated_at} />
+                        {state ? <LiveMark /> : <TimeAgo value={r.health_evaluated_at} />}
                       </TD>
                       <TD className="text-right">
                         <Link to={paths.resource(r.id)} className="text-sm font-medium text-primary hover:underline" aria-label={`View ${r.name}`}>

@@ -9,9 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Freshness } from "@/components/Freshness";
+import { AsOfLastCheck, LiveMark } from "@/components/live";
+import { shortReason, topReason } from "@/components/resourceSignals";
 import { ProjectCard, ProjectCardSkeleton } from "@/components/projects/ProjectCard";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
+import { useRefreshInterval } from "@/stores/live";
 import type { Overview, Project } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { formatDateTime } from "@/utils/format";
@@ -38,6 +42,7 @@ function SectionLink({ to, children }: { to: string; children: string }) {
 }
 
 function NeedsAttention({ items }: { items: Overview["needs_attention"] }) {
+  const { byId } = useLiveResources(items.map((r) => r.id));
   return (
     <Card>
       <CardHeader title="Needs attention" actions={items.length ? <SectionLink to="/resources?view=attention">View in Resources</SectionLink> : null} />
@@ -47,10 +52,14 @@ function NeedsAttention({ items }: { items: Overview["needs_attention"] }) {
         </CardContent>
       ) : (
         <ul className="divide-y divide-border/70 border-t border-border/70">
-          {items.map((r) => (
+          {items.map((r) => {
+            const state = byId[r.id];
+            const status = state?.status ?? r.health_status;
+            const live = state ? topReason(state.reasons) : null;
+            return (
             <li key={r.id} className="grid grid-cols-12 items-center gap-x-4 gap-y-1 px-5 py-3 text-sm">
               <div className="col-span-12 flex min-w-0 items-center gap-2.5 md:col-span-4">
-                <HealthDot status={r.health_status} />
+                <HealthDot status={status} />
                 <Link to={`/resources/${r.id}`} className="truncate font-medium hover:underline">
                   {r.name}
                 </Link>
@@ -59,9 +68,13 @@ function NeedsAttention({ items }: { items: Overview["needs_attention"] }) {
               <div className="col-span-6 truncate text-muted-foreground md:col-span-2">
                 {r.project_name ? `${r.project_name} / ${r.environment_name ?? "-"}` : "Unassigned"}
               </div>
-              <div className={cn("col-span-12 md:col-span-4", r.health_status === "critical" ? "text-critical" : "text-warning")}>{r.reason}</div>
+              <div className={cn("col-span-12 flex items-center gap-2 md:col-span-4", status === "critical" ? "text-critical" : status === "warning" ? "text-warning" : "text-healthy")}>
+                <span className="min-w-0">{state ? (live ? shortReason(live) : "Back within thresholds") : r.reason}</span>
+                {state ? <LiveMark className="shrink-0" /> : null}
+              </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </Card>
@@ -69,7 +82,8 @@ function NeedsAttention({ items }: { items: Overview["needs_attention"] }) {
 }
 
 function ProjectsSection() {
-  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval: 60_000 });
+  const refetchInterval = useRefreshInterval(60_000);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval });
   const canManage = usePermission(PERMISSIONS.manageProjects);
   return (
     <section aria-labelledby="overview-projects">
@@ -231,7 +245,8 @@ function RecentChanges({ changes }: { changes: Overview["recent_changes"] }) {
 }
 
 export function OverviewPage() {
-  const query = useQuery({ queryKey: ["overview"], queryFn: endpoints.overview, refetchInterval: 60_000 });
+  const refetchInterval = useRefreshInterval(60_000);
+  const query = useQuery({ queryKey: ["overview"], queryFn: endpoints.overview, refetchInterval });
   const { data: me } = useMe();
   if (query.isLoading) return <OverviewSkeleton />;
   if (query.isError || !query.data) {
@@ -297,6 +312,7 @@ export function OverviewPage() {
           }
         />
       </section>
+      <AsOfLastCheck className="-mt-5" />
 
       {o.feed_errors.length > 0 ? (
         <div role="status" className="rounded-lg border border-warning/30 bg-warning/5 px-5 py-3 text-sm">

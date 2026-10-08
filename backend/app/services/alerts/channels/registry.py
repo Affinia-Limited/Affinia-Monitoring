@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import logging
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
@@ -11,7 +14,13 @@ from app.models import NotificationChannel
 from app.services.alerts.channels.base import AlertNotification, ChannelNotConfiguredError, NotificationSender
 from app.services.secrets import get_secret
 
+logger = logging.getLogger(__name__)
+
 _TIMEOUT = httpx.Timeout(10.0)
+
+
+class DeliveryRefusedError(Exception):
+    """The endpoint is not acceptable (not https, or not a public address). Details are logged, not shown."""
 
 
 async def _endpoint(channel: NotificationChannel) -> str:
@@ -19,11 +28,29 @@ async def _endpoint(channel: NotificationChannel) -> str:
         raise ChannelNotConfiguredError("No Key Vault secret reference configured.")
     url = await get_secret(channel.secret_ref)
     if urlparse(url).scheme != "https":
-        raise ChannelNotConfiguredError("Notification endpoints must use HTTPS.")
+        logger.warning("notification_endpoint_refused", extra={"reason": "not_https"})
+        raise DeliveryRefusedError("not https")
     return url
 
 
+async def check_public_destination(url: str) -> None:
+    """Refuse endpoints that resolve to internal addresses (SSRF), e.g. metadata services or private networks."""
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        raise DeliveryRefusedError("no host")
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parsed.hostname, parsed.port or 443)
+    except OSError as exc:
+        raise DeliveryRefusedError("unresolvable") from exc
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if not address.is_global or address.is_multicast or address.is_reserved:
+            logger.warning("notification_endpoint_refused", extra={"reason": "internal_address"})
+            raise DeliveryRefusedError("internal address")
+
+
 async def _post(url: str, body: dict[str, Any]) -> None:
+    await check_public_destination(url)
     async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
         response = await client.post(url, json=body)
         response.raise_for_status()

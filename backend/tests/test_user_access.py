@@ -240,9 +240,28 @@ async def test_untrusted_tenant_is_rejected_before_any_lookup(client: httpx.Asyn
 
 async def test_repeated_failures_are_rate_limited(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "rate_limit_auth_failures_per_minute", 3)
-    statuses = [(await client.get("/api/v1/auth/me", headers=_token(str(uuid.uuid4())))).status_code for _ in range(5)]
+    # An identity without access is budgeted per identity.
+    stranger = _token(str(uuid.uuid4()))
+    statuses = [(await client.get("/api/v1/auth/me", headers=stranger)).status_code for _ in range(5)]
     assert statuses[:3] == [403, 403, 403]
     assert statuses[3:] == [429, 429]
+    # Invalid tokens are budgeted per client IP.
+    garbage = {"Authorization": "Bearer not-a-token"}
+    statuses = [(await client.get("/api/v1/auth/me", headers=garbage)).status_code for _ in range(5)]
+    assert statuses[:3] == [401, 401, 401]
+    assert statuses[3:] == [429, 429]
+
+
+async def test_failed_attempts_never_lock_out_valid_users(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anonymous junk from the same (proxy) IP must not deny service to signed-in members."""
+    monkeypatch.setattr(get_settings(), "rate_limit_auth_failures_per_minute", 3)
+    for _ in range(10):
+        await client.get("/api/v1/auth/me", headers={"Authorization": "Bearer junk"})
+    for _ in range(5):
+        await client.get("/api/v1/auth/me", headers=_token(str(uuid.uuid4())))
+    assert (await client.get("/api/v1/projects", headers=auth_headers("viewer"))).status_code == 200
 
 
 # ---------------------------------------------------------------- immediate effect of admin actions

@@ -25,7 +25,9 @@ server {
         return 200 "ok";
     }
 
-    location ~ ^/(api|health|ready|live)(/|$) {
+    # Only the API is public. The probes (/live, /ready, /health) are called on the API container
+    # directly by the platform; exposing them here would disclose configuration to anyone.
+    location ~ ^/api(/|$) {
         proxy_pass ${BACKEND_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;

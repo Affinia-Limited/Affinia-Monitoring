@@ -212,7 +212,7 @@ async def test_notifications_use_key_vault_reference(
     channel = (
         await client.post(
             "/api/v1/notification-channels",
-            json={"name": "Ops", "channel_type": "teams", "secret_ref": "ops-teams-hook"},
+            json={"name": "Ops", "channel_type": "teams", "secret_ref": "org-0-ops-teams-hook"},
             headers=auth_headers("admin"),
         )
     ).json()
@@ -222,7 +222,7 @@ async def test_notifications_use_key_vault_reference(
     async def fake_post(url: str, body: dict) -> None:
         sent.append({"url": url, "body": body})
 
-    monkeypatch.setenv("SECRET_OPS_TEAMS_HOOK", "https://example.test/teams")
+    monkeypatch.setenv("SECRET_ORG_0_OPS_TEAMS_HOOK", "https://example.test/teams")
     monkeypatch.setattr("app.services.alerts.channels.registry._post", fake_post)
 
     test = (

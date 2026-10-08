@@ -19,6 +19,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CsvList = Annotated[list[str], NoDecode]
+_DEFAULT_DB_CREDENTIALS = "monitoring:monitoring"
 _GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -52,11 +53,13 @@ class TaskBackend(StrEnum):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    environment: Environment = Environment.development
+    #: Fail safe: a deployment that forgets ENVIRONMENT gets production rules (no dev sign-in, no demo
+    #: data, no wildcard CORS). Local development sets it explicitly (.env.example, scripts/dev.*, compose).
+    environment: Environment = Environment.production
     app_name: str = "Azure Monitoring Platform"
     log_level: str = "INFO"
 
-    database_url: str = "postgresql+asyncpg://monitoring:monitoring@localhost:5432/monitoring"
+    database_url: str = f"postgresql+asyncpg://{_DEFAULT_DB_CREDENTIALS}@localhost:5432/monitoring"
     database_echo: bool = False
     #: ``password`` (credentials in DATABASE_URL, local development) or ``entra`` (Azure Database for
     #: PostgreSQL with Microsoft Entra authentication: the managed identity's access token is the password).
@@ -93,6 +96,11 @@ class Settings(BaseSettings):
     #: Other tenants the platform identity may request tokens for.
     azure_additionally_allowed_tenants: CsvList = Field(default_factory=list)
     key_vault_url: str | None = None
+    #: Which Azure tenants' subscriptions each organisation may connect, keyed by the organisation's Entra
+    #: tenant id, as JSON: ``{"<org-tenant-id>": ["<azure-tenant-id>", ...]}``. An organisation may always
+    #: connect subscriptions whose home tenant is its own Entra tenant; anything else (e.g. customer tenants
+    #: delegated through Lighthouse) must be granted here by a platform operator.
+    organization_azure_tenants: dict[str, list[str]] = Field(default_factory=dict)
 
     # --- Resource mapping ---
     project_tag_keys: CsvList = Field(default_factory=lambda: ["project", "Project", "application"])
@@ -167,6 +175,11 @@ class Settings(BaseSettings):
                 )
             if self.auth_mode is AuthMode.entra and tenant not in self.allowed_tenants:
                 raise ValueError("BOOTSTRAP_SUPER_ADMIN_OIDS references a tenant that is not allowed to sign in")
+        if non_dev and self.task_backend is TaskBackend.celery and not self.redis_url:
+            # Without it the worker would silently use redis://localhost and rate limits would be per process.
+            raise ValueError("TASK_BACKEND=celery requires REDIS_URL outside development")
+        if non_dev and self.database_auth == "password" and _DEFAULT_DB_CREDENTIALS in self.database_url:
+            raise ValueError("DATABASE_URL still uses the default development credentials")
         if non_dev and "*" in self.cors_origins:
             raise ValueError("Wildcard CORS origins are not permitted outside development")
         return self

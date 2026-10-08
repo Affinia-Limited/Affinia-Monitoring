@@ -296,6 +296,7 @@ export function ResourceDashboard({
   const [editing, setEditing] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<unknown>(null);
   // The last saved/reset version, shown immediately even before the parent query updates.
   const [latest, setLatest] = useState<Dashboard | null>(null);
   const dashboard =
@@ -350,7 +351,14 @@ export function ResourceDashboard({
   return (
     <>
       <DashboardTabs dashboard={dashboard} resource={resource} extraTabs={extraTabs} actions={actions} />
-      <Dialog open={confirmReset} onOpenChange={(o) => !resetting && setConfirmReset(o)}>
+      <Dialog
+        open={confirmReset}
+        onOpenChange={(o) => {
+          if (resetting) return;
+          setConfirmReset(o);
+          setResetError(null);
+        }}
+      >
         {confirmReset && dashboard ? (
           <DialogContent
             title="Reset this dashboard to its template?"
@@ -364,9 +372,12 @@ export function ResourceDashboard({
                   disabled={resetting}
                   onClick={async () => {
                     setResetting(true);
+                    setResetError(null);
                     try {
                       store(await endpoints.resetDashboard(dashboard.id));
                       setConfirmReset(false);
+                    } catch (failure) {
+                      setResetError(failure);
                     } finally {
                       setResetting(false);
                     }
@@ -378,6 +389,7 @@ export function ResourceDashboard({
             }
           >
             <p className="text-sm text-muted-foreground">This action is recorded in the audit log.</p>
+            {resetError ? <ErrorState error={resetError} compact className="mt-3" /> : null}
           </DialogContent>
         ) : null}
       </Dialog>

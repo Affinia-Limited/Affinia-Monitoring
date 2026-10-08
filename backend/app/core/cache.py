@@ -108,6 +108,12 @@ class RedisCache:
         except Exception:
             return False
 
+    async def close(self) -> None:
+        try:
+            await self._redis.aclose()
+        except Exception:
+            logger.warning("cache_close_failed")
+
 
 def cache_key(namespace: str, *parts: Any) -> str:
     digest = hashlib.sha256(json.dumps(parts, default=str, sort_keys=True).encode()).hexdigest()[:32]
@@ -130,3 +136,12 @@ def get_cache() -> Cache:
 def set_cache(cache: Cache | None) -> None:
     global _cache
     _cache = cache
+
+
+async def reset_cache() -> None:
+    """Close and forget the cache client (its connections belong to the current event loop)."""
+    global _cache
+    close = getattr(_cache, "close", None)
+    if close is not None:
+        await close()
+    _cache = None

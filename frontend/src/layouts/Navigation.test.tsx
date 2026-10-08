@@ -16,7 +16,6 @@ describe("Sidebar", () => {
     renderWithProviders(<Sidebar collapsed={false} />);
     expect(await screen.findByText("Viewer")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Live" })).toHaveAttribute("href", "/live");
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Audit log" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
@@ -32,6 +31,16 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Users" })).toHaveAttribute("href", "/settings/users");
     expect(screen.getByRole("link", { name: "Audit log" })).toHaveAttribute("href", "/settings?tab=audit");
     expect(await screen.findByLabelText("7 open alerts")).toBeInTheDocument();
+  });
+});
+
+describe("Sidebar filters", () => {
+  it("keeps the chosen project, environment and time range when moving between pages", async () => {
+    renderWithProviders(<Sidebar collapsed={false} />, { route: "/resources?project=p1&env=e1&range=7d&view=attention" });
+    expect(await screen.findByRole("link", { name: "Alerts" })).toHaveAttribute("href", "/alerts?project=p1&env=e1&range=7d");
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/?project=p1&env=e1&range=7d");
+    // Administration pages have no global filters; page-specific parameters (view) are not carried.
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 });
 

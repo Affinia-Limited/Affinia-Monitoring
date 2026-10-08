@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/menu";
 import { ToastProvider } from "@/components/ui/toast";
 import { AppRoutes } from "@/routes/AppRoutes";
 import { FilterProvider } from "@/stores/filters";
+import { LiveProvider } from "@/stores/live";
 import { ThemeProvider } from "@/stores/theme";
 
 export function createQueryClient(): QueryClient {
@@ -30,11 +31,13 @@ export function App() {
         <TooltipProvider>
           <ToastProvider>
           <BrowserRouter>
-            <FilterProvider>
-              <AuthGate>
-                <AppRoutes />
-              </AuthGate>
-            </FilterProvider>
+            <LiveProvider>
+              <FilterProvider>
+                <AuthGate>
+                  <AppRoutes />
+                </AuthGate>
+              </FilterProvider>
+            </LiveProvider>
           </BrowserRouter>
           </ToastProvider>
         </TooltipProvider>

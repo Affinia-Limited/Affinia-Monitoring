@@ -8,9 +8,11 @@ import pytest
 
 from tests.conftest import (
     AUDIENCE,
+    KID,
     OTHER_SIGNING_KEY,
     OTHER_TENANT,
     TEST_TENANT,
+    _jwks_handler,
     add_member,
     auth_headers,
     make_token,
@@ -122,3 +124,22 @@ async def test_public_auth_config_contains_no_secrets(client: httpx.AsyncClient)
     body = (await client.get("/api/v1/auth/config")).json()
     assert body["auth_mode"] == "entra"
     assert set(body) == {"auth_mode", "tenant_id", "client_id", "api_scope", "authority"}
+
+
+async def test_unknown_key_ids_cannot_force_repeated_jwks_downloads() -> None:
+    from app.core.errors import AuthenticationError
+    from app.core.security import JwksCache
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _jwks_handler(request)
+
+    cache = JwksCache("https://login.example", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await cache.get_key(TEST_TENANT, KID)
+    for i in range(20):
+        with pytest.raises(AuthenticationError):
+            await cache.get_key(TEST_TENANT, f"made-up-{i}")
+    assert calls == 1

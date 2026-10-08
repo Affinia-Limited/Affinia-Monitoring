@@ -23,6 +23,14 @@ from tests.helpers import find_resource, seeded
         "evaluate sql_request('Server=x', 'select 1')",
         ".show tables",
         "let x = 1;\n.drop table T",
+        # A comment cannot split a forbidden token.
+        "T | union workspace//x\n('other-ws').AzureActivity",
+        "T | evaluate//x\n http_request('https://example.test')",
+        "T | union app // note\n ('other-app').requests",
+        "print 1 // c\n.show tables",
+        # A '//' inside a string is not a comment that could hide what follows.
+        "print 'https://example.test' | union workspace('x').T",
+        "print @'C:\\path\\' | union workspace('x').T",
         "",
         "x" * 10_001,
     ],
@@ -38,6 +46,8 @@ def test_kql_guard_rejects_dangerous_queries(query: str) -> None:
         "AppServiceHTTPLogs | where ScStatus >= 500 | summarize Errors=count() by bin(TimeGenerated, 5m)",
         "requests | evaluate bag_unpack(customDimensions)",
         "traces | where message has 'workspace' | take 10",
+        "requests // workspace('x') is only mentioned in a comment\n| take 10",
+        "requests | where url startswith 'https://contoso.example' | take 10",
     ],
 )
 def test_kql_guard_allows_normal_queries(query: str) -> None:

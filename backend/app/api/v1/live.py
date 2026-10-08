@@ -1,9 +1,14 @@
-"""Live monitoring: current status and minute-by-minute metrics, polled by the Live page.
+"""Live mode: per-resource status and minute-by-minute metrics for the resources on screen.
 
-Status comes from the stored health evaluation (Resource Health, ARM state and metric
-rules, refreshed by the health job). Metrics are read from Azure Monitor on request at
-1-minute granularity over the last hour. The time range is aligned to the minute, so
-every viewer polling within the same minute shares one cached Azure read per metric.
+When Live is switched on, every page asks for the resources it is showing. Each resource's
+health-rule metrics are read from Azure Monitor at 1-minute granularity over the last hour
+and judged with the same rules, windows and thresholds as the health job. The live status
+combines those readings with the non-metric signals of the last health evaluation (Azure
+Resource Health and ARM state), so it moves as soon as a metric crosses a threshold instead
+of waiting for the next scheduled evaluation.
+
+The time range is aligned to the minute, so all viewers polling within the same minute
+share one cached Azure read per metric.
 """
 
 from __future__ import annotations
@@ -13,40 +18,27 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select
 
 from app.api.deps import Azure, CurrentUser, DbSession, require
+from app.core.errors import ValidationFailedError
 from app.core.permissions import Permission
-from app.models import Alert, AzureConnection, HealthThreshold, Project, Resource
+from app.models import AzureConnection, HealthThreshold, Resource
 from app.services.azure.types import TimeRange
 from app.services.health.evaluator import classify
 from app.services.metric_service import MetricData, MetricService, reduce_values
 from app.services.monitors.base import HealthRule
 from app.services.monitors.registry import get_monitor
-from app.services.views import (
-    OPEN_ALERT_STATUSES,
-    active_alert_counts_by_environment,
-    alert_views,
-    counts_for,
-    health_by_scope,
-    load_lookups,
-    resource_view,
-)
+from app.services.views import UNMONITORED_KEYS, worst
 
 router = APIRouter(prefix="/live", tags=["live"])
 
-Viewer = Annotated[CurrentUser, Depends(require(Permission.view_dashboards))]
+Viewer = Annotated[CurrentUser, Depends(require(Permission.view_resources))]
 
 WINDOW_MINUTES = 60
 INTERVAL = timedelta(minutes=1)
-#: Resources with live metrics per response, worst health first. Bounds the Azure calls per poll.
-MAX_RESOURCES = 24
-METRICS_PER_RESOURCE = 3
-#: Newest open alerts returned (the Live page's change feed relies on this limit).
-RECENT_ALERTS = 8
-
-_HEALTH_ORDER = case({"critical": 0, "warning": 1, "healthy": 2}, value=Resource.health_status, else_=3)
+#: Resources per request: one page of the largest resource table.
+MAX_RESOURCES = 50
 
 
 def _live_metric(data: MetricData, rule: HealthRule, warning: float | None, critical: float | None) -> dict[str, Any]:
@@ -68,73 +60,70 @@ def _live_metric(data: MetricData, rule: HealthRule, warning: float | None, crit
         "warning": warning,
         "critical": critical,
         "status": classify(window_value, rule, warning, critical) if window_value is not None else "unknown",
-        "points": [{"timestamp": p["timestamp"], "value": p["value"]} for p in points],
+        # One value per minute, oldest first, ending at ``latest_at``'s minute or earlier. Timestamps are
+        # implied by the response's window and interval, which keeps 5-second polls small.
+        "values": [None if p["value"] is None else round(p["value"], 3) for p in points],
         "unavailable_reason": data.unavailable_reason,
     }
 
 
-@router.get("")
-async def live(
+def _metric_reason(metric: dict[str, Any]) -> dict[str, Any]:
+    """A live breach in the same shape as a stored health reason."""
+    severity = metric["status"]
+    return {
+        "signal": "metric",
+        "severity": severity,
+        "metric": metric["key"],
+        "label": metric["label"],
+        "unit": metric["unit"],
+        "value": round(metric["window_value"], 3),
+        "operator": metric["operator"],
+        "threshold": metric["critical"] if severity == "critical" else metric["warning"],
+        "window_minutes": metric["window_minutes"],
+        "message": metric["label"],
+    }
+
+
+def _live_status(resource: Resource, metrics: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """Worst of the last evaluation's non-metric signals and the live metric readings."""
+    reasons = [r for r in resource.health_reasons or [] if r.get("signal") != "metric"]
+    reasons += [_metric_reason(m) for m in metrics if m["status"] in ("warning", "critical")]
+    statuses = [r["severity"] for r in reasons]
+    statuses += [m["status"] for m in metrics if m["status"] == "healthy"]
+    # A resource the health job could read (e.g. Resource Health "Available") counts as a healthy signal.
+    if resource.health_status != "unknown":
+        statuses.append("healthy")
+    return (worst(statuses) if statuses else "unknown"), reasons
+
+
+@router.get("/resources")
+async def live_resources(
     db: DbSession,
     azure: Azure,
     user: Viewer,
-    project_id: Annotated[uuid.UUID | None, Query()] = None,
-    environment_id: Annotated[uuid.UUID | None, Query()] = None,
+    ids: Annotated[str, Query(description="Comma-separated resource ids, at most 50")],
 ) -> dict[str, Any]:
+    try:
+        wanted = list(dict.fromkeys(uuid.UUID(v.strip()) for v in ids.split(",") if v.strip()))
+    except ValueError as exc:
+        raise ValidationFailedError("ids must be comma-separated resource ids.") from exc
+    if len(wanted) > MAX_RESOURCES:
+        raise ValidationFailedError(f"At most {MAX_RESOURCES} resources can be watched live at once.")
+
     org = user.organization_id
-    in_scope = [
-        Resource.organization_id == org,
-        Resource.deleted_at.is_(None),
-        Resource.monitor_key.is_not(None),
-        Resource.monitor_key != "generic",
-    ]
-    if project_id:
-        in_scope.append(Resource.project_id == project_id)
-    if environment_id:
-        in_scope.append(Resource.environment_id == environment_id)
-
-    statuses = list(await db.scalars(select(Resource.health_status).where(*in_scope)))
-    rows = list(
-        await db.scalars(select(Resource).where(*in_scope).order_by(_HEALTH_ORDER, Resource.name).limit(MAX_RESOURCES))
-    )
-
-    # Environments in scope, with the same roll-up as the overview.
-    project_query = select(Project).where(Project.organization_id == org, Project.deleted_at.is_(None))
-    if project_id:
-        project_query = project_query.where(Project.id == project_id)
-    projects = list(await db.scalars(project_query.options(selectinload(Project.environments)).order_by(Project.name)))
-    scopes = await health_by_scope(db, org, [p.id for p in projects])
-    env_alerts = await active_alert_counts_by_environment(db, org)
-    environments = []
-    for p in projects:
-        for e in p.environments:
-            if environment_id and e.id != environment_id:
-                continue
-            scope = scopes.get((p.id, e.id))
-            environments.append(
-                {
-                    "project_id": str(p.id),
-                    "project_name": p.name,
-                    "environment_id": str(e.id),
-                    "environment_name": e.name,
-                    "kind": e.kind,
-                    "status": scope.status if scope else "unknown",
-                    "counts": (scope.counts if scope else counts_for([])).model_dump(),
-                    "active_alerts": env_alerts.get((p.id, e.id), 0),
-                    "last_checked_at": scope.last_checked_at.isoformat() if scope and scope.last_checked_at else None,
-                }
+    rows = (
+        list(
+            await db.scalars(
+                select(Resource).where(
+                    Resource.organization_id == org, Resource.deleted_at.is_(None), Resource.id.in_(wanted)
+                )
             )
-
-    alert_scope = [Alert.organization_id == org, Alert.status.in_(OPEN_ALERT_STATUSES)]
-    if project_id or environment_id:
-        alert_scope.append(Alert.resource_id.in_(select(Resource.id).where(*in_scope)))
-    severity_rows = await db.execute(select(Alert.severity, func.count()).where(*alert_scope).group_by(Alert.severity))
-    by_severity = {sev: int(n) for sev, n in severity_rows.all()}
-    recent_alerts = list(
-        await db.scalars(select(Alert).where(*alert_scope).order_by(Alert.started_at.desc()).limit(RECENT_ALERTS))
+        )
+        if wanted
+        else []
     )
+    rows = [r for r in rows if r.monitor_key not in UNMONITORED_KEYS]
 
-    # Live metrics: each resource's health-rule metrics, with organisation threshold overrides.
     overrides = {
         (t.monitor_key, t.metric_name): t
         for t in await db.scalars(select(HealthThreshold).where(HealthThreshold.organization_id == org))
@@ -147,16 +136,16 @@ async def live(
     plans: list[list[tuple[HealthRule, float | None, float | None]]] = []
     for r in rows:
         monitor = get_monitor(r.monitor_key)
-        chosen: list[tuple[HealthRule, float | None, float | None]] = []
+        plan: list[tuple[HealthRule, float | None, float | None]] = []
         for rule in monitor.health_rules:
             override = overrides.get((monitor.key, rule.metric))
-            if (override is not None and not override.enabled) or any(c[0].metric == rule.metric for c in chosen):
+            if (override is not None and not override.enabled) or any(p[0].metric == rule.metric for p in plan):
                 continue
             if override is not None:
-                chosen.append((rule, override.warning_threshold, override.critical_threshold))
+                plan.append((rule, override.warning_threshold, override.critical_threshold))
             else:
-                chosen.append((rule, rule.warning, rule.critical))
-        plans.append(chosen[:METRICS_PER_RESOURCE])
+                plan.append((rule, rule.warning, rule.critical))
+        plans.append(plan)
 
     end = datetime.now(UTC).replace(second=0, microsecond=0)
     time_range = TimeRange(start=end - timedelta(minutes=WINDOW_MINUTES), end=end, preset="live")
@@ -166,35 +155,25 @@ async def live(
     ]
     readings = await MetricService(db, azure).get_metrics_many(requests, time_range, INTERVAL)
 
-    lookups = await load_lookups(db, org, rows)
-    resources = []
+    generated_at = datetime.now(UTC).isoformat()
+    resources: dict[str, dict[str, Any]] = {}
     for r, plan, data in zip(rows, plans, readings, strict=True):
-        view = resource_view(r, lookups)
-        resources.append(
-            {
-                "id": str(r.id),
-                "name": r.name,
-                "type_display_name": view.type_display_name,
-                "project_id": str(r.project_id) if r.project_id else None,
-                "project_name": view.project_name,
-                "environment_id": str(r.environment_id) if r.environment_id else None,
-                "environment_name": view.environment_name,
-                "health_status": r.health_status,
-                "health_evaluated_at": r.health_evaluated_at.isoformat() if r.health_evaluated_at else None,
-                "active_alerts": view.active_alerts,
-                "metrics": [_live_metric(d, rule, w, c) for d, (rule, w, c) in zip(data, plan, strict=True)],
-            }
-        )
+        metrics = [_live_metric(d, rule, w, c) for d, (rule, w, c) in zip(data, plan, strict=True)]
+        status, reasons = _live_status(r, metrics)
+        resources[str(r.id)] = {
+            "id": str(r.id),
+            "status": status,
+            "reasons": reasons,
+            "evaluated_status": r.health_status,
+            "evaluated_at": r.health_evaluated_at.isoformat() if r.health_evaluated_at else None,
+            "metrics": metrics,
+            "checked_at": generated_at,
+        }
 
     return {
         "is_mock": azure.is_mock,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": generated_at,
         "window_minutes": WINDOW_MINUTES,
         "interval_seconds": int(INTERVAL.total_seconds()),
-        "health": counts_for(statuses).model_dump(),
-        "alerts": {"active": sum(by_severity.values()), "by_severity": by_severity},
-        "environments": environments,
         "resources": resources,
-        "resources_total": len(statuses),
-        "recent_alerts": [a.model_dump(mode="json") for a in await alert_views(db, recent_alerts)],
     }

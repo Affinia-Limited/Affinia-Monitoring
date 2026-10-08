@@ -22,6 +22,19 @@ _UUID_SEGMENT = re.compile(r"/[0-9a-fA-F-]{36}(?=/|$)")
 _DOCS_PATHS = ("/api/docs", "/api/redoc", "/api/openapi.json")
 
 
+def _route_template(request: Request) -> str:
+    """The matched route with its parameters named, e.g. ``/api/v1/resources/{resource_id}``.
+
+    Never the raw path: arbitrary URLs must not create new metric series. Unmatched requests share
+    one label. (Nested routers only expose their own part of the template, so the parameters are
+    put back into the real path instead.)
+    """
+    if request.scope.get("route") is None:
+        return "unmatched"
+    params = {str(v): k for k, v in (request.scope.get("path_params") or {}).items()}
+    return "/".join(f"{{{params[seg]}}}" if seg in params else seg for seg in request.url.path.split("/"))
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         incoming = request.headers.get("x-request-id", "")
@@ -37,7 +50,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             elapsed = time.perf_counter() - start
             route = _UUID_SEGMENT.sub("/{id}", request.url.path)
             HTTP_REQUESTS.inc(f"{status // 100}xx")
-            HTTP_LATENCY.observe(route, elapsed)
+            HTTP_LATENCY.observe(_route_template(request), elapsed)
             if request.url.path not in ("/live", "/ready", "/metrics"):
                 logger.info(
                     "http_request",

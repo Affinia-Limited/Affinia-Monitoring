@@ -11,6 +11,9 @@ resource-centric query to that resource's data):
 * ``evaluate`` is limited to an allow-list of pure analytic plugins
   (blocking ``http_request``, ``sql_request`` and similar)
 * query length is bounded
+
+All checks run on the query with ``//`` comments removed (string literals are respected), so a
+comment cannot split a forbidden token, e.g. ``workspace//x`` + newline + ``("other")``.
 """
 
 from __future__ import annotations
@@ -37,23 +40,64 @@ _ALLOWED_PLUGINS = {
 }
 
 
+def strip_comments(query: str) -> str:
+    """The query without ``//`` comments, string literals kept verbatim.
+
+    Understands KQL string forms: '...' and "..." with backslash escapes, verbatim @'...' / @"..."
+    (a doubled quote escapes), and multi-line ```...```. An unterminated string runs to the end,
+    which keeps the remaining text visible to the checks.
+    """
+    out: list[str] = []
+    i, n = 0, len(query)
+    while i < n:
+        if query.startswith("```", i):
+            end = query.find("```", i + 3)
+            end = n if end < 0 else end + 3
+            out.append(query[i:end])
+            i = end
+        elif query[i] in "'\"":
+            quote = query[i]
+            verbatim = i > 0 and query[i - 1] == "@"
+            j = i + 1
+            while j < n:
+                if not verbatim and query[j] == "\\":
+                    j += 2
+                    continue
+                if query[j] == quote:
+                    if verbatim and j + 1 < n and query[j + 1] == quote:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            out.append(query[i : j + 1])
+            i = j + 1
+        elif query.startswith("//", i):
+            end = query.find("\n", i)
+            i = n if end < 0 else end
+        else:
+            out.append(query[i])
+            i += 1
+    return "".join(out)
+
+
 def validate_kql(query: str) -> str:
     stripped = query.strip()
     if not stripped:
         raise ValidationFailedError("The query is empty.", code="KQL_EMPTY")
     if len(stripped) > MAX_QUERY_LENGTH:
         raise ValidationFailedError("The query is too long.", code="KQL_TOO_LONG")
-    if _CONTROL.search(stripped):
+    code = strip_comments(stripped)
+    if _CONTROL.search(code):
         raise ValidationFailedError("Management commands are not permitted.", code="KQL_FORBIDDEN")
-    if match := _CROSS_SCOPE.search(stripped):
+    if match := _CROSS_SCOPE.search(code):
         raise ValidationFailedError(
             f"Cross-resource function '{match.group(1)}()' is not permitted. Queries are scoped to the "
             "selected resource.",
             code="KQL_FORBIDDEN",
         )
-    if match := _EXTERNAL.search(stripped):
+    if match := _EXTERNAL.search(code):
         raise ValidationFailedError(f"'{match.group(1)}' is not permitted.", code="KQL_FORBIDDEN")
-    for plugin in _EVALUATE.findall(stripped):
+    for plugin in _EVALUATE.findall(code):
         if plugin.lower() not in _ALLOWED_PLUGINS:
             raise ValidationFailedError(f"The '{plugin}' plugin is not permitted.", code="KQL_FORBIDDEN")
     return stripped

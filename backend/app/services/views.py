@@ -135,7 +135,11 @@ async def active_alert_counts_by_project(db: AsyncSession, organization_id: uuid
     rows = await db.execute(
         select(Resource.project_id, func.count(Alert.id))
         .join(Resource, Resource.id == Alert.resource_id)
-        .where(Alert.organization_id == organization_id, Alert.status.in_(OPEN_ALERT_STATUSES))
+        .where(
+            Alert.organization_id == organization_id,
+            Alert.status.in_(OPEN_ALERT_STATUSES),
+            Resource.deleted_at.is_(None),
+        )
         .group_by(Resource.project_id)
     )
     return {pid: int(n) for pid, n in rows.all() if pid}
@@ -147,7 +151,11 @@ async def active_alert_counts_by_environment(
     rows = await db.execute(
         select(Resource.project_id, Resource.environment_id, func.count(Alert.id))
         .join(Resource, Resource.id == Alert.resource_id)
-        .where(Alert.organization_id == organization_id, Alert.status.in_(OPEN_ALERT_STATUSES))
+        .where(
+            Alert.organization_id == organization_id,
+            Alert.status.in_(OPEN_ALERT_STATUSES),
+            Resource.deleted_at.is_(None),
+        )
         .group_by(Resource.project_id, Resource.environment_id)
     )
     return {(pid, eid): int(n) for pid, eid, n in rows.all() if pid and eid}

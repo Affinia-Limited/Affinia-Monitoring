@@ -5,9 +5,10 @@ import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/menu";
 import { ToastProvider } from "@/components/ui/toast";
 import { FilterProvider } from "@/stores/filters";
+import { LiveProvider } from "@/stores/live";
 import { ThemeProvider } from "@/stores/theme";
 
-export function renderWithProviders(ui: ReactElement, { route = "/" }: { route?: string } = {}) {
+export function renderWithProviders(ui: ReactElement, { route = "/", live = false }: { route?: string; live?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
   return {
     client,
@@ -17,7 +18,9 @@ export function renderWithProviders(ui: ReactElement, { route = "/" }: { route?:
           <TooltipProvider>
             <ToastProvider>
             <MemoryRouter initialEntries={[route]}>
-              <FilterProvider>{ui}</FilterProvider>
+              <LiveProvider initial={live}>
+                <FilterProvider>{ui}</FilterProvider>
+              </LiveProvider>
             </MemoryRouter>
             </ToastProvider>
           </TooltipProvider>

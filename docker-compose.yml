@@ -112,8 +112,9 @@ services:
     environment:
       BACKEND_UPSTREAM: http://backend:8000
     ports:
-      # Set WEB_BIND=127.0.0.1 when a host reverse proxy (nginx/Apache with TLS) fronts the stack.
-      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:8080"
+      # Local only by default: with AUTH_MODE=dev every visitor is a Super Admin. Set WEB_BIND=0.0.0.0
+      # only with AUTH_MODE=entra, or behind a host reverse proxy that authenticates.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     depends_on:
       backend:
         condition: service_healthy

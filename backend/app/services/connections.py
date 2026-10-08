@@ -14,7 +14,8 @@ from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AzureConnection, Dashboard, Resource, Subscription
+from app.models import Alert, AzureConnection, Dashboard, Resource, Subscription
+from app.services.alerts.evaluator import resolve_open_alerts
 from app.services.audit import record_audit
 from app.services.azure.mock.estate import MOCK_TENANT_ID
 
@@ -52,6 +53,12 @@ async def disconnect(
     if resource_ids:
         for dashboard in await db.scalars(select(Dashboard).where(Dashboard.resource_id.in_(resource_ids))):
             dashboard.deleted_at = now
+        await resolve_open_alerts(
+            db,
+            connection.organization_id,
+            Alert.resource_id.in_(resource_ids),
+            "Closed: the resource's Azure connection was removed.",
+        )
     details: dict[str, object] = {"name": connection.name, "resources_archived": len(resource_ids)}
     if reason:
         details["reason"] = reason

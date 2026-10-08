@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import SLUG_PATTERN, ORMModel
 
@@ -18,6 +18,13 @@ def _clean_tags(values: list[str]) -> list[str]:
         if v and len(v) <= 100 and v.lower() not in (c.lower() for c in cleaned):
             cleaned.append(v)
     return cleaned[:20]
+
+
+def reject_explicit_nulls(model: BaseModel, *fields: str) -> None:
+    """In a partial update, an omitted field means "unchanged"; ``null`` is not a value these columns accept."""
+    nulls = [f for f in fields if f in model.model_fields_set and getattr(model, f) is None]
+    if nulls:
+        raise ValueError(f"{', '.join(nulls)} cannot be null; omit the field to leave it unchanged")
 
 
 class EnvironmentIn(BaseModel):
@@ -38,6 +45,16 @@ class EnvironmentUpdate(BaseModel):
     kind: EnvironmentKind | None = None
     sort_order: int | None = Field(default=None, ge=0, le=1000)
     tag_values: list[str] | None = None
+
+    @field_validator("tag_values")
+    @classmethod
+    def _tags(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else _clean_tags(v)
+
+    @model_validator(mode="after")
+    def _no_nulls(self) -> EnvironmentUpdate:
+        reject_explicit_nulls(self, "name", "kind", "sort_order", "tag_values")
+        return self
 
 
 class EnvironmentOut(ORMModel):
@@ -68,6 +85,16 @@ class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     tag_values: list[str] | None = None
+
+    @field_validator("tag_values")
+    @classmethod
+    def _tags(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else _clean_tags(v)
+
+    @model_validator(mode="after")
+    def _no_nulls(self) -> ProjectUpdate:
+        reject_explicit_nulls(self, "name", "description", "tag_values")
+        return self
 
 
 class HealthCounts(BaseModel):

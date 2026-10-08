@@ -60,15 +60,15 @@ export function AlertTable({
             </TD>
             <TD>{a.metric_name ?? "-"}</TD>
             <TD className="tabular text-right whitespace-nowrap">
-              {a.current_value === null ? "-" : formatValue(a.current_value, "")}
+              {a.current_value === null ? "-" : formatValue(a.current_value, a.unit ?? "")}
               {a.threshold !== null ? (
                 <div className="text-xs text-muted-foreground lg:hidden">
-                  Threshold {OPERATORS[a.operator ?? ""] ?? ""} {formatValue(a.threshold, "")}
+                  Threshold {OPERATORS[a.operator ?? ""] ?? ""} {formatValue(a.threshold, a.unit ?? "")}
                 </div>
               ) : null}
             </TD>
             <TD className={`tabular text-right whitespace-nowrap ${LG_ONLY}`}>
-              {a.threshold === null ? "-" : `${OPERATORS[a.operator ?? ""] ?? ""} ${formatValue(a.threshold, "")}`}
+              {a.threshold === null ? "-" : `${OPERATORS[a.operator ?? ""] ?? ""} ${formatValue(a.threshold, a.unit ?? "")}`}
             </TD>
             <TD className="whitespace-nowrap">
               <TimeAgo value={a.started_at} />

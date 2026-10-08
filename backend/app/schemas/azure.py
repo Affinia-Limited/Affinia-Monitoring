@@ -5,9 +5,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import GUID_PATTERN, ORMModel
+from app.schemas.projects import reject_explicit_nulls
 
 
 def _clean_subscription_ids(values: list[str]) -> list[str]:
@@ -51,6 +52,12 @@ class ConnectionUpdate(BaseModel):
     @classmethod
     def _validate_subs(cls, values: list[str]) -> list[str]:
         return _clean_subscription_ids(values)
+
+    @model_validator(mode="after")
+    def _no_nulls(self) -> ConnectionUpdate:
+        # default_project_id / default_environment_id may be cleared with null; these may not.
+        reject_explicit_nulls(self, "name", "sync_enabled")
+        return self
 
 
 class SubscriptionOut(ORMModel):

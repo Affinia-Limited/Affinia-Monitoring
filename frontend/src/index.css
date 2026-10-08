@@ -23,10 +23,11 @@
   --destructive: #c62f3b;
   --destructive-foreground: #ffffff;
 
-  --status-healthy: #1f9d62;
-  --status-warning: #d98a0b;
-  --status-critical: #d63343;
-  --status-unknown: #8a94a6;
+  /* Light-mode status colours are also text colours: each reaches WCAG AA (4.5:1) on --card and --background. */
+  --status-healthy: #137a4a;
+  --status-warning: #9a5b00;
+  --status-critical: #c22b3a;
+  --status-unknown: #5f6878;
   --status-info: #2f6fb3;
 
   --chart-1: #2f6fb3;

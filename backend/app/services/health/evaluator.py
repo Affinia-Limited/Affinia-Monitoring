@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -29,8 +29,8 @@ from app.db.session import session_scope
 from app.models import AzureConnection, HealthThreshold, Resource, Subscription
 from app.services.azure.provider import get_azure_services
 from app.services.azure.resource_health import health_from_availability
-from app.services.azure.types import AzureServices
-from app.services.metric_service import MetricService
+from app.services.azure.types import AzureServices, TimeRange
+from app.services.metric_service import MetricService, reduce_values
 from app.services.monitors.base import HealthRule, Operator
 from app.services.monitors.registry import get_monitor
 
@@ -131,7 +131,21 @@ async def evaluate_resources(
     for conn in connections.values():
         availability[conn.id] = await _availability(db, azure, conn)
 
-    metrics = MetricService(db, azure)
+    # Every (resource, rule) metric is read up front, concurrently and batched (see MetricService).
+    plans: dict[uuid.UUID, list[tuple[HealthRule, float | None, float | None]]] = {}
+    for resource in resources:
+        monitor = get_monitor(resource.monitor_key)
+        plan = []
+        for rule in monitor.health_rules:
+            override = overrides.get((monitor.key, rule.metric))
+            if override is not None and not override.enabled:
+                continue
+            warning = override.warning_threshold if override else rule.warning
+            critical = override.critical_threshold if override else rule.critical
+            plan.append((rule, warning, critical))
+        plans[resource.id] = plan
+    values = await _rule_values(db, azure, resources, connections, plans)
+
     stats = {"evaluated": 0, "healthy": 0, "warning": 0, "critical": 0, "unknown": 0}
     for resource in resources:
         connection = connections[resource.connection_id]
@@ -158,19 +172,20 @@ async def evaluate_resources(
         reasons.extend(state)
         signals += 1 if state or resource.properties.get("state") or resource.properties.get("status") else 0
 
-        for rule in monitor.health_rules:
-            override = overrides.get((monitor.key, rule.metric))
-            if override is not None and not override.enabled:
+        previous_reasons = {r.get("metric"): r for r in resource.health_reasons or [] if r.get("signal") == "metric"}
+        previous_readings = {r.get("metric"): r for r in resource.health_metrics or []}
+        for rule, warning, critical in plans[resource.id]:
+            value, failed = values[(resource.id, rule.metric)]
+            if failed:
+                # Azure could not be read (throttling, outage): keep what the last evaluation found for
+                # this rule rather than silently dropping a breach and reporting the resource healthy.
+                if rule.metric in previous_readings:
+                    signals += 1
+                    readings.append(previous_readings[rule.metric])
+                if rule.metric in previous_reasons:
+                    reasons.append(previous_reasons[rule.metric])
                 continue
-            warning = override.warning_threshold if override else rule.warning
-            critical = override.critical_threshold if override else rule.critical
-            try:
-                value, unavailable = await metrics.window_value(
-                    resource, connection.tenant_id, rule.metric, rule.window_minutes, rule.reducer
-                )
-            except AppError:
-                continue
-            if unavailable or value is None:
+            if value is None:
                 continue
             signals += 1
             severity = classify(value, rule, warning, critical)
@@ -217,6 +232,43 @@ async def evaluate_resources(
     return stats
 
 
+#: Reasons a metric has no value that are not failures: it simply has no data for this resource.
+_NO_DATA_REASONS = {"NO_DATA", "RELATED_RESOURCE_NOT_FOUND", "METRIC_NOT_SUPPORTED", "METRIC_NOT_FOUND"}
+
+
+async def _rule_values(
+    db: AsyncSession,
+    azure: AzureServices,
+    resources: list[Resource],
+    connections: dict[uuid.UUID, AzureConnection],
+    plans: dict[uuid.UUID, list[tuple[HealthRule, float | None, float | None]]],
+) -> dict[tuple[uuid.UUID, str], tuple[float | None, bool]]:
+    """``(value, failed)`` per (resource, metric) over each rule's window; ``failed`` means Azure errored."""
+    end = datetime.now(UTC).replace(second=0, microsecond=0)
+    by_id = {r.id: r for r in resources}
+    pairs = [(rid, rule) for rid, plan in plans.items() for rule, _, _ in plan]
+    out: dict[tuple[uuid.UUID, str], tuple[float | None, bool]] = {}
+    metrics = MetricService(db, azure)
+    for window in sorted({rule.window_minutes for _, rule in pairs}):
+        group = [(rid, rule) for rid, rule in pairs if rule.window_minutes == window]
+        time_range = TimeRange(start=end - timedelta(minutes=window), end=end, preset="custom")
+        interval = timedelta(minutes=5) if window >= 15 else timedelta(minutes=1)
+        requests = [(by_id[rid], connections[by_id[rid].connection_id].tenant_id, [rule.metric]) for rid, rule in group]
+        try:
+            results = await metrics.get_metrics_many(requests, time_range, interval)
+        except AppError:
+            for rid, rule in group:
+                out[(rid, rule.metric)] = (None, True)
+            continue
+        for (rid, rule), [data] in zip(group, results, strict=True):
+            if data.unavailable_reason:
+                out[(rid, rule.metric)] = (None, data.unavailable_reason not in _NO_DATA_REASONS)
+                continue
+            points = [p["value"] for s in data.series[:1] for p in s["points"] if p["value"] is not None]
+            out[(rid, rule.metric)] = (reduce_values(points, rule.reducer), False)
+    return out
+
+
 async def run_health_job(organization_id: str | None = None) -> None:
     """Scheduled job: evaluate health for every organisation (or one)."""
     from app.models import Organization
@@ -230,12 +282,20 @@ async def run_health_job(organization_id: str | None = None) -> None:
                 query = query.where(Organization.id == uuid.UUID(organization_id))
             org_ids = list(await db.scalars(query))
         azure = get_azure_services()
+        failed = 0
         for org_id in org_ids:
-            async with session_scope() as db:
-                await evaluate_resources(db, azure, org_id)
-            async with session_scope() as db:
-                await evaluate_alert_rules(db, azure, org_id)
+            # One organisation's failure (e.g. Azure unreachable for its tenant) must not stop the others.
+            try:
+                async with session_scope() as db:
+                    await evaluate_resources(db, azure, org_id)
+                async with session_scope() as db:
+                    await evaluate_alert_rules(db, azure, org_id)
+            except Exception:
+                failed += 1
+                logger.exception("health_job_org_failed", extra={"organization_id": str(org_id)})
         await get_cache().delete_prefix("amp:overview")
+        if failed:
+            raise RuntimeError(f"Health evaluation failed for {failed} organisation(s).")
     except Exception:
         JOB_FAILURES.inc("health")
         logger.exception("health_job_failed")

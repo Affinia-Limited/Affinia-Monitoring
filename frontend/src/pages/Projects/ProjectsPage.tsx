@@ -3,6 +3,7 @@ import { Plus, Search } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
+import { useRefreshInterval } from "@/stores/live";
 import { PageHeader } from "@/components/common";
 import { FilterChips } from "@/components/FilterChips";
 import { Freshness } from "@/components/Freshness";
@@ -33,7 +34,8 @@ function matches(p: Project, term: string): boolean {
 }
 
 export function ProjectsPage() {
-  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval: 60_000 });
+  const refetchInterval = useRefreshInterval(60_000);
+  const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval });
   const canManage = usePermission(PERMISSIONS.manageProjects);
   const [params, setParams] = useSearchParams();
   const [term, setTerm] = useState("");

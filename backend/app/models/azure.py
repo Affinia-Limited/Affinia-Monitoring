@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, SoftDelete, Timestamps, UUIDPrimaryKey
@@ -44,7 +44,17 @@ class AzureConnection(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
 
 class Subscription(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
     __tablename__ = "subscriptions"
-    __table_args__ = (UniqueConstraint("organization_id", "subscription_id", name="uq_subscriptions_org_sub"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "subscription_id", name="uq_subscriptions_org_sub"),
+        # A subscription is actively connected to at most one organisation.
+        Index(
+            "uq_subscriptions_active_subscription",
+            "subscription_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     connection_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("azure_connections.id"), index=True)
@@ -80,6 +90,7 @@ class Resource(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
         UniqueConstraint("organization_id", "azure_id", name="uq_resources_org_azure_id"),
         Index("ix_resources_org_type", "organization_id", "resource_type"),
         Index("ix_resources_project_env", "project_id", "environment_id"),
+        Index("ix_resources_environment", "environment_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
@@ -127,6 +138,16 @@ class SyncRun(UUIDPrimaryKey, Timestamps, Base):
     """One execution of discovery/synchronisation for a connection, with step-by-step progress."""
 
     __tablename__ = "sync_runs"
+    __table_args__ = (
+        # One queued or running sync per connection, even when requests race.
+        Index(
+            "uq_sync_runs_active_connection",
+            "connection_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+    )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     connection_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("azure_connections.id"), index=True)
@@ -138,6 +159,8 @@ class SyncRun(UUIDPrimaryKey, Timestamps, Base):
     stats: Mapped[dict[str, Any]] = mapped_column(default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Updated whenever the running job saves progress; a running sync without one is abandoned.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)

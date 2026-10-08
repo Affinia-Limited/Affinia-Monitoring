@@ -3,6 +3,7 @@ import { cn } from "@/utils/cn";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Dialog, DialogContent } from "./ui/dialog";
+import { ErrorState } from "./ui/states";
 
 export function PageHeader({
   title,
@@ -74,9 +75,25 @@ export function ConfirmButton({
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <Button variant={destructive ? "outline" : "secondary"} size="sm" disabled={disabled} onClick={() => setOpen(true)}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (busy) return;
+        setOpen(o);
+        setError(null);
+      }}
+    >
+      <Button
+        variant={destructive ? "outline" : "secondary"}
+        size="sm"
+        disabled={disabled}
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
         {children}
       </Button>
       <DialogContent
@@ -84,7 +101,7 @@ export function ConfirmButton({
         description={description}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setOpen(false)}>
+            <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button
@@ -92,9 +109,13 @@ export function ConfirmButton({
               disabled={busy}
               onClick={async () => {
                 setBusy(true);
+                setError(null);
                 try {
                   await onConfirm();
                   setOpen(false);
+                } catch (failure) {
+                  // Keep the dialog open and say why, instead of failing silently.
+                  setError(failure);
                 } finally {
                   setBusy(false);
                 }
@@ -106,6 +127,7 @@ export function ConfirmButton({
         }
       >
         <p className="text-sm text-muted-foreground">This action is recorded in the audit log.</p>
+        {error ? <ErrorState error={error} compact className="mt-3" /> : null}
       </DialogContent>
     </Dialog>
   );

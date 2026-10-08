@@ -30,6 +30,7 @@ from app.core.errors import AuthenticationError, PermissionDeniedError
 logger = logging.getLogger(__name__)
 
 _ALLOWED_ALGORITHMS = ["RS256"]
+_JWKS_MIN_REFRESH_SECONDS = 60
 _JWKS_TTL_SECONDS = 3600
 _LEEWAY_SECONDS = 60
 
@@ -85,7 +86,11 @@ class JwksCache:
             return cached[1][kid]
         async with self._lock:
             cached = self._keys.get(tenant_id)
-            if not (cached and now - cached[0] < _JWKS_TTL_SECONDS and kid in cached[1]):
+            expired = cached is None or now - cached[0] >= _JWKS_TTL_SECONDS
+            # An unknown kid triggers a refresh (key rotation), but at most once per interval: otherwise
+            # tokens with made-up kids would force a key download on every request.
+            rotated = cached is not None and kid not in cached[1] and now - cached[0] >= _JWKS_MIN_REFRESH_SECONDS
+            if expired or rotated:
                 self._keys[tenant_id] = (now, await self._fetch(tenant_id))
         key = self._keys[tenant_id][1].get(kid)
         if key is None:

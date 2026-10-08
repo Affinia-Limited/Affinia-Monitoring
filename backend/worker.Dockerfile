@@ -21,5 +21,5 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 USER 10001
 HEALTHCHECK --interval=60s --timeout=20s --start-period=30s --retries=3 \
-  CMD celery -A app.workers.celery_app inspect ping --timeout 10 >/dev/null 2>&1 || exit 1
+  CMD celery -A app.workers.celery_app inspect ping -d "celery@$(hostname)" --timeout 10 >/dev/null 2>&1 || exit 1
 CMD ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO", "--concurrency=4"]

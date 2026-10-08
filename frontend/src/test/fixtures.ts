@@ -161,6 +161,7 @@ export function alert(overrides: Partial<Alert> = {}): Alert {
     current_value: 94,
     threshold: 90,
     operator: "gt",
+    unit: "percent",
     started_at: new Date(Date.now() - 10 * 60_000).toISOString(),
     last_evaluated_at: null,
     acknowledged_at: null,

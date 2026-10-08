@@ -3,10 +3,12 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
+import { useRefreshInterval } from "@/stores/live";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { ConfirmButton, PageHeader } from "@/components/common";
 import { Freshness } from "@/components/Freshness";
 import { HEALTH_LABELS, HealthSummary, HealthText } from "@/components/health";
+import { AsOfLastCheck } from "@/components/live";
 import { EnvironmentCard } from "@/components/projects/EnvironmentCard";
 import { EnvironmentNav } from "@/components/projects/EnvironmentNav";
 import { Button } from "@/components/ui/button";
@@ -152,7 +154,8 @@ export function ProjectDetailPage() {
   const canManage = usePermission(PERMISSIONS.manageProjects);
   const [editOpen, setEditOpen] = useState(false);
   const [envOpen, setEnvOpen] = useState(false);
-  const query = useQuery({ queryKey: ["project", projectId], queryFn: () => endpoints.project(projectId), refetchInterval: 60_000 });
+  const refetchInterval = useRefreshInterval(60_000);
+  const query = useQuery({ queryKey: ["project", projectId], queryFn: () => endpoints.project(projectId), refetchInterval });
 
   // Old links used ?environment=<id>; environments now have their own page.
   const legacyEnvironment = params.get("environment");
@@ -238,6 +241,7 @@ export function ProjectDetailPage() {
             <CardHeader title="Project health" description="All monitored resources in this project" />
             <CardContent className="space-y-5">
               <HealthSummary counts={project.health} title="Overall" />
+              <AsOfLastCheck />
               <p className="text-sm">
                 <span className="text-muted-foreground">Active alerts: </span>
                 <span className={cn("tabular font-medium", project.active_alerts ? "text-critical" : "")}>{project.active_alerts}</span>

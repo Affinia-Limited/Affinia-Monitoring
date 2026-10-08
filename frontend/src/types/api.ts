@@ -274,6 +274,8 @@ export interface Alert {
   current_value: number | null;
   threshold: number | null;
   operator: string | null;
+  /** Unit of ``current_value`` and ``threshold`` (percent, milliseconds, bytes, ...), from the rule's metric. */
+  unit: string | null;
   started_at: string;
   last_evaluated_at: string | null;
   acknowledged_at: string | null;
@@ -676,48 +678,30 @@ export interface LiveMetric {
   critical: number | null;
   /** ``window_value`` against the thresholds; ``unknown`` when there is no data. */
   status: HealthStatus;
-  points: { timestamp: string; value: number | null }[];
+  /** One value per minute over the window, oldest first (null where Azure had no data). */
+  values: (number | null)[];
   unavailable_reason: string | null;
 }
 
-export interface LiveResource {
+/** One resource's live state: status from live metrics plus the last check's non-metric signals. */
+export interface LiveResourceState {
   id: string;
-  name: string;
-  type_display_name: string;
-  project_id: string | null;
-  project_name: string | null;
-  environment_id: string | null;
-  environment_name: string | null;
-  health_status: HealthStatus;
-  health_evaluated_at: string | null;
-  active_alerts: number;
-  metrics: LiveMetric[];
-}
-
-export interface LiveEnvironment {
-  project_id: string;
-  project_name: string;
-  environment_id: string;
-  environment_name: string;
-  kind: string;
   status: HealthStatus;
-  counts: HealthCounts;
-  active_alerts: number;
-  last_checked_at: string | null;
+  /** Live metric breaches and the last check's Resource Health / state findings. */
+  reasons: HealthReason[];
+  /** Status from the last scheduled health evaluation, for comparison. */
+  evaluated_status: HealthStatus;
+  evaluated_at: string | null;
+  /** Every health-rule metric of the resource, most important first. */
+  metrics: LiveMetric[];
+  checked_at: string;
 }
 
-export interface Live {
+export interface LiveResources {
   is_mock: boolean;
   generated_at: string;
   window_minutes: number;
   interval_seconds: number;
-  /** Monitored resources in scope by stored health status. */
-  health: HealthCounts;
-  alerts: { active: number; by_severity: Partial<Record<Severity, number>> };
-  environments: LiveEnvironment[];
-  /** Worst health first, at most 24. */
-  resources: LiveResource[];
-  /** All monitored resources in scope (``resources`` may be a subset). */
-  resources_total: number;
-  recent_alerts: Alert[];
+  /** Keyed by resource id; inventory items and unknown ids are absent. */
+  resources: Record<string, LiveResourceState>;
 }

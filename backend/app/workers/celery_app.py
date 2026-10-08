@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from celery import Celery
+from celery.signals import setup_logging
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
 settings = get_settings()
 configure_logging(settings.log_level)
+
+
+@setup_logging.connect
+def _keep_app_logging(**_: Any) -> None:
+    """Stop Celery replacing the root handlers, which would drop JSON output and secret redaction."""
+    configure_logging(settings.log_level)
+
 
 broker = settings.redis_url or "redis://localhost:6379/0"
 
@@ -19,6 +29,9 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_time_limit=3600,
     task_soft_time_limit=3300,
+    # With acks_late, a task whose worker died is redelivered after the visibility timeout; it must
+    # exceed the longest task, or a running task would be delivered twice.
+    broker_transport_options={"visibility_timeout": 3600 + 300},
     task_default_retry_delay=30,
     broker_connection_retry_on_startup=True,
     task_serializer="json",

@@ -4,7 +4,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, SoftDelete, Timestamps, UUIDPrimaryKey
@@ -74,10 +86,20 @@ class Alert(UUIDPrimaryKey, Timestamps, Base):
     __table_args__ = (
         Index("ix_alerts_org_status", "organization_id", "status"),
         Index("ix_alerts_fingerprint", "organization_id", "fingerprint"),
+        Index("ix_alerts_org_started", "organization_id", "started_at"),
+        # At most one open alert per condition, even when two evaluations overlap.
+        Index(
+            "uq_alerts_open_fingerprint",
+            "organization_id",
+            "fingerprint",
+            unique=True,
+            postgresql_where=text("status IN ('active', 'acknowledged')"),
+            sqlite_where=text("status IN ('active', 'acknowledged')"),
+        ),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
-    rule_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("alert_rules.id"), nullable=True)
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("alert_rules.id"), nullable=True, index=True)
     resource_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("resources.id"), index=True)
     #: Stable identity of the condition (rule + resource) used to de-duplicate firing.
     fingerprint: Mapped[str] = mapped_column(String(128))

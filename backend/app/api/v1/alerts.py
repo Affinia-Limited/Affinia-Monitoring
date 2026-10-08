@@ -17,6 +17,7 @@ from app.models import (
     Environment,
     HealthThreshold,
     NotificationChannel,
+    Organization,
     Project,
     Resource,
 )
@@ -34,6 +35,7 @@ from app.schemas.alerts import (
 from app.schemas.common import Page
 from app.services.alerts.channels.base import AlertNotification
 from app.services.alerts.channels.registry import get_sender
+from app.services.alerts.evaluator import resolve_open_alerts
 from app.services.audit import record_audit
 from app.services.monitors.registry import all_monitors, get_monitor
 from app.services.views import alert_views
@@ -93,7 +95,10 @@ async def list_alerts(
         )
     total = await db.scalar(select(func.count()).select_from(query.subquery()))
     alerts = list(
-        await db.scalars(query.order_by(Alert.started_at.desc()).offset((page - 1) * page_size).limit(page_size))
+        # Alerts fired in one evaluation share started_at; id keeps OFFSET pages stable.
+        await db.scalars(
+            query.order_by(Alert.started_at.desc(), Alert.id).offset((page - 1) * page_size).limit(page_size)
+        )
     )
     return Page(items=await alert_views(db, alerts), total=int(total or 0), page=page, page_size=page_size)
 
@@ -171,24 +176,36 @@ async def _validate_rule(db: DbSession, user: CurrentUser, body: AlertRuleIn) ->
         raise ValidationFailedError("Unknown resource type or metric.")
     if body.resource_id:
         r = await db.scalar(
-            select(Resource.id).where(Resource.id == body.resource_id, Resource.organization_id == user.organization_id)
+            select(Resource.id).where(
+                Resource.id == body.resource_id,
+                Resource.organization_id == user.organization_id,
+                Resource.deleted_at.is_(None),
+            )
         )
         if r is None:
             raise ValidationFailedError("Resource not found.")
     if body.project_id:
         p = await db.scalar(
-            select(Project.id).where(Project.id == body.project_id, Project.organization_id == user.organization_id)
+            select(Project.id).where(
+                Project.id == body.project_id,
+                Project.organization_id == user.organization_id,
+                Project.deleted_at.is_(None),
+            )
         )
         if p is None:
             raise ValidationFailedError("Project not found.")
     if body.environment_id:
         e = await db.scalar(
-            select(Environment.id).where(
-                Environment.id == body.environment_id, Environment.organization_id == user.organization_id
+            select(Environment).where(
+                Environment.id == body.environment_id,
+                Environment.organization_id == user.organization_id,
+                Environment.deleted_at.is_(None),
             )
         )
         if e is None:
             raise ValidationFailedError("Environment not found.")
+        if body.project_id and e.project_id != body.project_id:
+            raise ValidationFailedError("The environment must belong to the selected project.")
     if body.notification_channel_ids:
         found = await db.scalar(
             select(func.count(NotificationChannel.id)).where(
@@ -256,6 +273,8 @@ async def update_rule(
     await _validate_rule(db, user, body)
     for field, value in _rule_values(body).items():
         setattr(rule, field, value)
+    if not rule.enabled:
+        await resolve_open_alerts(db, user.organization_id, Alert.rule_id == rule.id, "Closed: the rule was disabled.")
     await record_audit(
         db,
         action="alert_rule.changed",
@@ -274,6 +293,7 @@ async def delete_rule(rule_id: uuid.UUID, request: Request, db: DbSession, user:
     rule = await _rule(db, user, rule_id)
     rule.deleted_at = datetime.now(UTC)
     rule.enabled = False
+    await resolve_open_alerts(db, user.organization_id, Alert.rule_id == rule.id, "Closed: the rule was deleted.")
     await record_audit(
         db,
         action="alert_rule.deleted",
@@ -305,6 +325,14 @@ async def create_channel(body: ChannelIn, request: Request, db: DbSession, user:
     sender = get_sender(body.channel_type)
     if sender and sender.requires_secret and not body.secret_ref:
         raise ValidationFailedError("This channel type requires a Key Vault secret reference.")
+    if body.secret_ref:
+        # Key Vault is shared by every organisation: a channel may only use this organisation's secrets.
+        slug = await db.scalar(select(Organization.slug).where(Organization.id == user.organization_id))
+        if not body.secret_ref.lower().startswith(f"{slug}-"):
+            raise ValidationFailedError(
+                f"The Key Vault secret name must start with your organisation's prefix '{slug}-' "
+                f"(for example '{slug}-teams-ops')."
+            )
     for value in body.config.values():
         for item in value if isinstance(value, list) else [value]:
             if "://" in item:
@@ -384,7 +412,13 @@ async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, u
     except Exception as exc:
         from app.services.alerts.channels.base import ChannelNotConfiguredError
 
-        message = str(exc) if isinstance(exc, ChannelNotConfiguredError) else "Delivery failed."
+        # One message for every delivery problem, so the test cannot be used to probe Key Vault.
+        message = (
+            str(exc)
+            if isinstance(exc, ChannelNotConfiguredError)
+            else "Delivery failed. Check that the Key Vault secret exists and holds the endpoint's public "
+            "https:// URL, and that the endpoint accepts the request."
+        )
         outcome = {"status": "failed", "message": message}
     await record_audit(
         db,

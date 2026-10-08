@@ -220,7 +220,12 @@ async def test_tenant_scoped_credential_passes_tenant() -> None:
     assert "tenant_id" not in captured
 
 
-async def test_jwks_cache_refreshes_on_key_rotation() -> None:
+async def test_jwks_cache_refreshes_on_key_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from app.core import security
+
+    real_monotonic = time.monotonic
     from cryptography.hazmat.primitives.asymmetric import rsa
     from jwt.algorithms import RSAAlgorithm
 
@@ -245,6 +250,9 @@ async def test_jwks_cache_refreshes_on_key_rotation() -> None:
     await cache.get_key("t", "k1")
     assert fetches == 1
     keys.append(jwk("k2"))
+    # A new kid is fetched once the minimum refresh interval has passed (made-up kids cannot force
+    # a download on every request).
+    monkeypatch.setattr(security.time, "monotonic", lambda: real_monotonic() + 61)
     await cache.get_key("t", "k2")
     assert fetches == 2
 

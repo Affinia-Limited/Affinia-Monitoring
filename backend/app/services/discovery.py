@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
@@ -58,7 +59,11 @@ ENVIRONMENT_ALIASES: dict[str, set[str]] = {
     "production": {"prod", "production", "prd", "live", "prod01"},
 }
 
+#: A queued run nobody picked up in this long is abandoned.
 STALE_RUN_AFTER = timedelta(hours=1)
+#: A running run whose job has not saved progress in this long is abandoned (e.g. the worker died).
+#: Progress is saved at every step boundary; well under the Celery task time limit.
+HEARTBEAT_TIMEOUT = timedelta(minutes=20)
 
 
 def now_utc() -> datetime:
@@ -173,6 +178,7 @@ class SyncProgress:
     async def _save(self) -> None:
         # JSON columns are not mutation-tracked; flag the change explicitly.
         flag_modified(self.run, "steps")
+        self.run.heartbeat_at = now_utc()
         await self.db.commit()
 
     async def start(self, key: str) -> None:
@@ -348,6 +354,7 @@ async def execute_sync(db: AsyncSession, run: SyncRun, azure: AzureServices) -> 
         return
 
     run.status, run.started_at = "running", now_utc()
+    run.heartbeat_at = run.started_at
     await db.commit()
     current = "authenticate"
     try:
@@ -444,7 +451,14 @@ async def run_sync_job(sync_run_id: str) -> None:
     try:
         async with session_scope() as db:
             run = await db.get(SyncRun, uuid.UUID(sync_run_id))
-            if run is None or run.status not in ("queued",):
+            if run is None:
+                return
+            if run.status == "running" and is_abandoned(run):
+                # Redelivered after the worker running it died: start it again from the beginning.
+                logger.warning("sync_run_resumed", extra={"sync_run_id": sync_run_id})
+                run.steps = new_steps()
+                run.status = "queued"
+            if run.status != "queued":
                 return
             await execute_sync(db, run, get_azure_services())
     except Exception:
@@ -453,17 +467,57 @@ async def run_sync_job(sync_run_id: str) -> None:
         raise
 
 
+def is_abandoned(run: SyncRun) -> bool:
+    """A queued run never picked up, or a running run whose job stopped saving progress."""
+    if run.status == "queued":
+        return now_utc() - _aware(run.created_at) > STALE_RUN_AFTER
+    last = run.heartbeat_at or run.started_at or run.created_at
+    return now_utc() - _aware(last) > HEARTBEAT_TIMEOUT
+
+
 async def active_run(db: AsyncSession, connection_id: uuid.UUID) -> SyncRun | None:
     run = await db.scalar(
         select(SyncRun)
         .where(SyncRun.connection_id == connection_id, SyncRun.status.in_(["queued", "running"]))
         .order_by(SyncRun.created_at.desc())
     )
-    if run and (now_utc() - _aware(run.created_at)) > STALE_RUN_AFTER:
+    if run and is_abandoned(run):
         run.status, run.error_code, run.error_message = "failed", "STALE", "The run did not complete in time."
         run.finished_at = now_utc()
+        await db.flush()
         return None
     return run
+
+
+async def queue_sync_run(
+    db: AsyncSession, connection: AzureConnection, trigger: str, requested_by_id: uuid.UUID | None = None
+) -> tuple[SyncRun, bool]:
+    """Queue a sync unless one is already queued or running. Returns ``(run, created)``.
+
+    A partial unique index allows one active run per connection, so concurrent requests cannot
+    both create one; the loser gets the winner's run.
+    """
+    existing = await active_run(db, connection.id)
+    if existing is not None:
+        return existing, False
+    run = SyncRun(
+        organization_id=connection.organization_id,
+        connection_id=connection.id,
+        trigger=trigger,
+        status="queued",
+        steps=new_steps(),
+        requested_by_id=requested_by_id,
+    )
+    try:
+        async with db.begin_nested():
+            db.add(run)
+            await db.flush()
+    except IntegrityError:
+        existing = await active_run(db, connection.id)
+        if existing is None:
+            raise
+        return existing, False
+    return run, True
 
 
 def _aware(value: datetime) -> datetime:

@@ -1,8 +1,10 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import type { Resource } from "@/types/api";
 import { regionName } from "@/utils/format";
-import { HealthDot } from "./status";
+import { HealthText } from "./health";
+import { LiveMetricInline, liveMetricsByAttention } from "./live";
 import { EmptyState } from "./ui/states";
 import { LG_ONLY, Table, TD, TH, THead, TR } from "./ui/table";
 
@@ -10,15 +12,18 @@ export type ResourceSort = "health" | "name" | "type" | "location";
 
 const HEALTH_ORDER: Record<string, number> = { critical: 0, warning: 1, unknown: 2, healthy: 3 };
 
-/** Health first (critical, warning, unknown, healthy), then name. Prefix "-" to reverse. */
-export function sortResources(items: Resource[], sort: string): Resource[] {
+/**
+ * Health first (critical, warning, unknown, healthy), then name. Prefix "-" to reverse. ``statusOf``
+ * overrides the stored status (e.g. with live status while Live is on).
+ */
+export function sortResources(items: Resource[], sort: string, statusOf: (r: Resource) => string = (r) => r.health_status): Resource[] {
   const desc = sort.startsWith("-");
   const key = sort.replace("-", "") as ResourceSort;
   const byName = (a: Resource, b: Resource) => a.name.localeCompare(b.name);
   const compare = (a: Resource, b: Resource): number => {
     switch (key) {
       case "health":
-        return (HEALTH_ORDER[a.health_status] ?? 9) - (HEALTH_ORDER[b.health_status] ?? 9) || byName(a, b);
+        return (HEALTH_ORDER[statusOf(a)] ?? 9) - (HEALTH_ORDER[statusOf(b)] ?? 9) || byName(a, b);
       case "type":
         return a.type_display_name.localeCompare(b.type_display_name) || byName(a, b);
       case "location":
@@ -74,16 +79,20 @@ export function ResourcesTable({
   onSelectionChange?: (next: Set<string>) => void;
   emptyTitle?: string;
 }) {
-  if (resources.length === 0) {
+  const { live, byId, stale } = useLiveResources(resources.map((r) => r.id));
+  const statusOf = (r: Resource) => byId[r.id]?.status ?? r.health_status;
+  // The page arrives ordered by the last health check; while Live is on, order it by live status.
+  const rows = live && (sort ?? "health").replace("-", "") === "health" ? sortResources(resources, sort ?? "health", statusOf) : resources;
+  if (rows.length === 0) {
     return <EmptyState title={emptyTitle} description="Clear the filters, or run a synchronisation from Azure Connections." />;
   }
   const selectable = !!selected && !!onSelectionChange;
-  const allSelected = selectable && resources.every((r) => selected.has(r.id));
-  const someSelected = selectable && !allSelected && resources.some((r) => selected.has(r.id));
+  const allSelected = selectable && rows.every((r) => selected.has(r.id));
+  const someSelected = selectable && !allSelected && rows.some((r) => selected.has(r.id));
   const toggleAll = () => {
     if (!selectable) return;
     const next = new Set(selected);
-    resources.forEach((r) => (allSelected ? next.delete(r.id) : next.add(r.id)));
+    rows.forEach((r) => (allSelected ? next.delete(r.id) : next.add(r.id)));
     onSelectionChange(next);
   };
   return (
@@ -105,13 +114,17 @@ export function ResourcesTable({
           ) : null}
           <SortHeader label="Name" column="name" sort={sort} onSort={onSort} />
           <SortHeader label="Type" column="type" sort={sort} onSort={onSort} />
+          <SortHeader label={live ? "Live status" : "Status"} column="health" sort={sort} onSort={onSort} />
+          {live ? <TH>Live metrics</TH> : null}
           {showProject ? <TH>Project / Environment</TH> : null}
           <SortHeader label="Region" column="location" sort={sort} onSort={onSort} />
           <TH className={LG_ONLY}>Resource group</TH>
         </TR>
       </THead>
       <tbody>
-        {resources.map((r) => (
+        {rows.map((r) => {
+          const state = byId[r.id];
+          return (
           <TR key={r.id} className="hover:bg-muted/40" data-selected={selected?.has(r.id) || undefined}>
             {selectable ? (
               <TD className="w-10">
@@ -130,13 +143,30 @@ export function ResourcesTable({
             ) : null}
             <TD>
               <span className="flex min-w-0 items-center gap-2.5">
-                <HealthDot status={r.health_status} />
                 <Link to={`/resources/${r.id}`} className="truncate font-medium hover:underline">
                   {r.name}
                 </Link>
               </span>
             </TD>
             <TD className="whitespace-nowrap text-muted-foreground">{r.type_display_name}</TD>
+            <TD>
+              <HealthText status={statusOf(r)} />
+            </TD>
+            {live ? (
+              <TD>
+                {state?.metrics.length ? (
+                  <span className="flex flex-col gap-1">
+                    {liveMetricsByAttention(state)
+                      .slice(0, 2)
+                      .map((m) => (
+                        <LiveMetricInline key={m.key} metric={m} />
+                      ))}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">{state ? "No metrics" : !r.monitor_key || r.monitor_key === "generic" ? "Not monitored" : stale ? "Unavailable" : "Loading"}</span>
+                )}
+              </TD>
+            ) : null}
             {showProject ? (
               <TD className="whitespace-nowrap">
                 {r.project_name ? (
@@ -154,7 +184,8 @@ export function ResourcesTable({
               {r.resource_group}
             </TD>
           </TR>
-        ))}
+          );
+        })}
       </tbody>
     </Table>
   );

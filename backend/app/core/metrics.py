@@ -29,8 +29,13 @@ class Counter:
     def render(self) -> list[str]:
         lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} counter"]
         for key, val in sorted(self._values.items()):
-            lines.append(f'{self.name}{{{self.label}="{key}"}} {val}')
+            lines.append(f'{self.name}{{{self.label}="{_escape(key)}"}} {val}')
         return lines
+
+
+def _escape(value: str) -> str:
+    """Prometheus label value escaping (backslash, double quote, newline)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 class Histogram:
@@ -51,11 +56,12 @@ class Histogram:
 
     def render(self) -> list[str]:
         lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} histogram"]
-        for key, buckets in sorted(self._buckets.items()):
+        for raw, buckets in sorted(self._buckets.items()):
+            key = _escape(raw)
             for i, bound in enumerate(_LATENCY_BUCKETS):
                 lines.append(f'{self.name}_bucket{{{self.label}="{key}",le="{bound}"}} {buckets[i]}')
             lines.append(f'{self.name}_bucket{{{self.label}="{key}",le="+Inf"}} {buckets[-1]}')
-            lines.append(f'{self.name}_sum{{{self.label}="{key}"}} {self._sum[key]:.6f}')
+            lines.append(f'{self.name}_sum{{{self.label}="{key}"}} {self._sum[raw]:.6f}')
             lines.append(f'{self.name}_count{{{self.label}="{key}"}} {buckets[-1]}')
         return lines
 

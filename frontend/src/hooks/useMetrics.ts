@@ -1,19 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import { endpoints } from "@/api/endpoints";
 import { useFilters } from "@/stores/filters";
+import { LIVE_REFRESH_MS, useLiveMode } from "@/stores/live";
 import { timeRangeParams } from "@/utils/timeRange";
 
-/** All metric keys of one widget in one request; cached per resource + keys + time range. */
+/**
+ * All metric keys of one widget in one request; cached per resource + keys + time range.
+ * While Live is on the range is the last hour and charts refresh every ``LIVE_REFRESH_MS``.
+ */
 export function useMetrics(resourceId: string | undefined, keys: string[]) {
   const { timeRange } = useFilters();
+  const { live } = useLiveMode();
   const params = timeRangeParams(timeRange);
   const metrics = keys.join(",");
   return useQuery({
     queryKey: ["metrics", resourceId, metrics, params],
     queryFn: () => endpoints.metrics(resourceId as string, { metrics, ...params }),
     enabled: !!resourceId && keys.length > 0,
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    staleTime: live ? 0 : 60_000,
+    refetchInterval: live ? LIVE_REFRESH_MS : 120_000,
   });
 }
 

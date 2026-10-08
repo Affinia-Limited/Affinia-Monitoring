@@ -9,9 +9,9 @@ from sqlalchemy import func, select
 from app.api.deps import Azure, CurrentUser, DbSession, require
 from app.core.config import Environment as AppEnvironment
 from app.core.config import get_settings
-from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
-from app.models import AzureConnection, Environment, Project, Resource, Subscription, SyncRun
+from app.models import AzureConnection, Environment, Organization, Project, Resource, Subscription, SyncRun
 from app.schemas.azure import (
     ConnectionCreated,
     ConnectionIn,
@@ -24,7 +24,7 @@ from app.schemas.azure import (
 from app.schemas.common import column_values
 from app.services.audit import record_audit
 from app.services.connections import disconnect, is_demo_connection
-from app.services.discovery import active_run, new_steps
+from app.services.discovery import queue_sync_run
 from app.services.jobs import enqueue_sync
 
 router = APIRouter(prefix="/azure", tags=["azure"])
@@ -70,11 +70,17 @@ async def platform_identity(user: Connector, azure: Azure) -> PlatformIdentityOu
 
 @router.get("/available-subscriptions", response_model=list[dict[str, str]])
 async def available_subscriptions(
-    user: Connector, azure: Azure, tenant_id: Annotated[str, Query(pattern=r"^[0-9a-fA-F-]{36}$")]
+    db: DbSession, user: Connector, azure: Azure, tenant_id: Annotated[str, Query(pattern=r"^[0-9a-fA-F-]{36}$")]
 ) -> list[dict[str, str]]:
-    """Subscriptions the platform identity can already read in a tenant."""
+    """Subscriptions the platform identity can read in a tenant that this organisation may connect."""
     subs = await azure.resource_graph.list_subscriptions(tenant_id.lower())
-    return [{"subscription_id": s.subscription_id, "display_name": s.display_name, "state": s.state} for s in subs]
+    allowed = await _allowed_azure_tenants(db, user, azure)
+    elsewhere = await _connected_elsewhere(db, user, [s.subscription_id for s in subs])
+    return [
+        {"subscription_id": s.subscription_id, "display_name": s.display_name, "state": s.state}
+        for s in subs
+        if (allowed is None or s.tenant_id.lower() in allowed) and s.subscription_id.lower() not in elsewhere
+    ]
 
 
 async def _connection_view(db: DbSession, connection: AzureConnection) -> ConnectionOut:
@@ -133,7 +139,35 @@ async def _validate_defaults(
             raise ValidationFailedError("The default environment must belong to the default project.")
 
 
-async def _check_subscriptions_free(db: DbSession, user: CurrentUser, subscription_ids: list[str]) -> None:
+async def _allowed_azure_tenants(db: DbSession, user: CurrentUser, azure: Azure) -> set[str] | None:
+    """Home tenants whose subscriptions this organisation may connect; ``None`` means any (demo data only).
+
+    The platform identity can often read many organisations' subscriptions (e.g. every customer that
+    delegated access through Lighthouse), so being readable is not proof of ownership.
+    """
+    if azure.is_mock:
+        return None
+    org_tenant = await db.scalar(select(Organization.entra_tenant_id).where(Organization.id == user.organization_id))
+    allowed = {t.lower() for t in get_settings().organization_azure_tenants.get(org_tenant or "", [])}
+    if org_tenant:
+        allowed.add(org_tenant.lower())
+    return allowed
+
+
+async def _connected_elsewhere(db: DbSession, user: CurrentUser, subscription_ids: list[str]) -> set[str]:
+    rows = await db.scalars(
+        select(Subscription.subscription_id).where(
+            Subscription.organization_id != user.organization_id,
+            Subscription.subscription_id.in_([s.lower() for s in subscription_ids]),
+            Subscription.deleted_at.is_(None),
+        )
+    )
+    return {r.lower() for r in rows}
+
+
+async def _check_subscriptions_free(
+    db: DbSession, user: CurrentUser, azure: Azure, tenant_id: str, subscription_ids: list[str]
+) -> None:
     taken = list(
         await db.scalars(
             select(Subscription.subscription_id).where(
@@ -148,6 +182,29 @@ async def _check_subscriptions_free(db: DbSession, user: CurrentUser, subscripti
             "Some subscriptions are already connected.",
             code="SUBSCRIPTION_ALREADY_CONNECTED",
             details={"subscription_ids": taken},
+        )
+    # A subscription belongs to one organisation. Which one is not disclosed.
+    elsewhere = await _connected_elsewhere(db, user, subscription_ids)
+    if elsewhere:
+        raise ConflictError(
+            "Some subscriptions are connected to another organisation.",
+            code="SUBSCRIPTION_OWNED_ELSEWHERE",
+            details={"subscription_ids": sorted(elsewhere)},
+        )
+    allowed = await _allowed_azure_tenants(db, user, azure)
+    if allowed is None:
+        return
+    refused = []
+    for sub_id in subscription_ids:
+        info = await azure.resource_graph.get_subscription(tenant_id, sub_id)
+        if info.tenant_id.lower() not in allowed:
+            refused.append(sub_id)
+    if refused:
+        raise PermissionDeniedError(
+            "These subscriptions belong to an Azure tenant your organisation is not approved for. "
+            "A platform operator can approve it (ORGANIZATION_AZURE_TENANTS).",
+            code="SUBSCRIPTION_TENANT_NOT_ALLOWED",
+            details={"subscription_ids": refused},
         )
 
 
@@ -172,16 +229,7 @@ async def _attach_subscription(db: DbSession, user: CurrentUser, connection: Azu
 
 
 async def _queue_run(db: DbSession, connection: AzureConnection, trigger: str, user: CurrentUser) -> SyncRun:
-    run = SyncRun(
-        organization_id=connection.organization_id,
-        connection_id=connection.id,
-        trigger=trigger,
-        status="queued",
-        steps=new_steps(),
-        requested_by_id=user.id,
-    )
-    db.add(run)
-    await db.flush()
+    run, _ = await queue_sync_run(db, connection, trigger, user.id)
     return run
 
 
@@ -196,11 +244,13 @@ async def list_connections(db: DbSession, user: Viewer) -> list[ConnectionOut]:
 
 
 @router.post("/connections", response_model=ConnectionCreated, status_code=status.HTTP_202_ACCEPTED)
-async def create_connection(body: ConnectionIn, request: Request, db: DbSession, user: Connector) -> ConnectionCreated:
+async def create_connection(
+    body: ConnectionIn, request: Request, db: DbSession, azure: Azure, user: Connector
+) -> ConnectionCreated:
     if body.auth_method == "developer" and get_settings().environment is not AppEnvironment.development:
         raise ValidationFailedError("Developer credentials can only be used in local development.")
     await _validate_defaults(db, user, body.default_project_id, body.default_environment_id)
-    await _check_subscriptions_free(db, user, body.subscription_ids)
+    await _check_subscriptions_free(db, user, azure, body.tenant_id, body.subscription_ids)
 
     connection = AzureConnection(
         organization_id=user.organization_id,
@@ -238,7 +288,7 @@ async def get_connection(connection_id: uuid.UUID, db: DbSession, user: Viewer) 
 
 @router.patch("/connections/{connection_id}", response_model=ConnectionOut)
 async def update_connection(
-    connection_id: uuid.UUID, body: ConnectionUpdate, request: Request, db: DbSession, user: Connector
+    connection_id: uuid.UUID, body: ConnectionUpdate, request: Request, db: DbSession, azure: Azure, user: Connector
 ) -> ConnectionOut:
     connection = await _get_connection(db, user, connection_id)
     changes = body.model_dump(exclude_unset=True)
@@ -246,7 +296,7 @@ async def update_connection(
     env_id = changes.get("default_environment_id", connection.default_environment_id)
     await _validate_defaults(db, user, project_id, env_id)
     if body.add_subscription_ids:
-        await _check_subscriptions_free(db, user, body.add_subscription_ids)
+        await _check_subscriptions_free(db, user, azure, connection.tenant_id, body.add_subscription_ids)
         for sub_id in body.add_subscription_ids:
             await _attach_subscription(db, user, connection, sub_id)
     for field in ("name", "sync_enabled", "default_project_id", "default_environment_id"):
@@ -275,11 +325,10 @@ async def delete_connection(connection_id: uuid.UUID, request: Request, db: DbSe
 @router.post("/connections/{connection_id}/sync", response_model=SyncRunOut, status_code=status.HTTP_202_ACCEPTED)
 async def sync_connection(connection_id: uuid.UUID, request: Request, db: DbSession, user: Syncer) -> SyncRun:
     connection = await _get_connection(db, user, connection_id)
-    existing = await active_run(db, connection.id)
-    if existing:
+    run, created = await queue_sync_run(db, connection, "manual", user.id)
+    if not created:
         await db.commit()
-        return existing
-    run = await _queue_run(db, connection, "manual", user)
+        return run
     await record_audit(
         db,
         action="azure.sync.started",
@@ -304,13 +353,10 @@ async def sync_all(request: Request, db: DbSession, user: Syncer) -> list[SyncRu
     )
     runs, queued = [], []
     for connection in connections:
-        existing = await active_run(db, connection.id)
-        if existing:
-            runs.append(existing)
-            continue
-        run = await _queue_run(db, connection, "manual", user)
+        run, created = await queue_sync_run(db, connection, "manual", user.id)
         runs.append(run)
-        queued.append(str(run.id))
+        if created:
+            queued.append(str(run.id))
     await record_audit(
         db,
         action="azure.sync.started",

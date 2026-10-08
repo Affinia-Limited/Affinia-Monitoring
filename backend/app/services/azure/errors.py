@@ -6,11 +6,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from azure.core.exceptions import AzureError as SdkAzureError
 from azure.core.exceptions import (
     ClientAuthenticationError,
     HttpResponseError,
     ResourceNotFoundError,
     ServiceRequestError,
+    ServiceResponseError,
 )
 
 from app.core.errors import (
@@ -65,7 +67,13 @@ async def azure_call(operation: str) -> AsyncIterator[None]:
         if status == 400:
             raise AzureQueryError(_safe_azure_message(exc)) from exc
         raise AzureError() from exc
-    except ServiceRequestError as exc:
+    except (ServiceRequestError, ServiceResponseError) as exc:
+        # Connection failures, resets and read timeouts.
         AZURE_FAILURES.inc(operation)
-        logger.error("azure_unreachable", extra={"operation": operation})
+        logger.error("azure_unreachable", extra={"operation": operation, "error_type": type(exc).__name__})
         raise AzureError("Azure could not be reached. Please retry shortly.", code="AZURE_UNREACHABLE") from exc
+    except SdkAzureError as exc:
+        # Anything else the SDK raises must still surface as an application error, never a crash.
+        AZURE_FAILURES.inc(operation)
+        logger.error("azure_call_error", extra={"operation": operation, "error_type": type(exc).__name__})
+        raise AzureError() from exc

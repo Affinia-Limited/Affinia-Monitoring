@@ -1,7 +1,7 @@
 import axios, { type AxiosError } from "axios";
 import type { ApiErrorBody } from "@/types/api";
 import { env } from "@/utils/env";
-import { acquireApiToken } from "./auth";
+import { acquireApiToken, getMsal, ReauthenticationRequiredError, startReauthentication } from "./auth";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -36,17 +36,57 @@ export function onAccessDenied(listener: AccessDeniedListener): () => void {
 
 export const api = axios.create({ baseURL: env.apiBaseUrl, timeout: 60_000 });
 
+/** The request was not sent (or was refused) because the user is being signed in again. */
+export function isReauthenticating(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "REAUTHENTICATING";
+}
+
+function reauthenticatingError(): ApiError {
+  return new ApiError(401, { code: "REAUTHENTICATING", message: new ReauthenticationRequiredError().message });
+}
+
+const REAUTH_KEY = "amp.reauth.at";
+const REAUTH_INTERVAL_MS = 2 * 60_000;
+
+/**
+ * At most one 401-triggered sign-in per interval. If the API still refuses a fresh token (e.g. a
+ * misconfigured audience or a tenant that is not allowed), show the error instead of redirecting in a loop.
+ */
+function claimReauthAttempt(): boolean {
+  try {
+    const last = Number(window.sessionStorage.getItem(REAUTH_KEY) ?? 0);
+    if (Date.now() - last < REAUTH_INTERVAL_MS) return false;
+    window.sessionStorage.setItem(REAUTH_KEY, String(Date.now()));
+  } catch {
+    // Storage unavailable: still allow the attempt; MSAL's own state prevents parallel redirects.
+  }
+  return true;
+}
+
 api.interceptors.request.use(async (config) => {
-  const token = await acquireApiToken();
-  if (token) config.headers.set("Authorization", `Bearer ${token}`);
+  try {
+    const token = await acquireApiToken();
+    if (token) config.headers.set("Authorization", `Bearer ${token}`);
+  } catch (error) {
+    if (error instanceof ReauthenticationRequiredError) throw reauthenticatingError();
+    throw error;
+  }
   return config;
 });
 
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<{ error?: ApiErrorBody }>) => {
+  (error: AxiosError<{ error?: ApiErrorBody }> | ApiError) => {
+    // Raised by the request interceptor: the request was never sent.
+    if (error instanceof ApiError) return Promise.reject(error);
     const status = error.response?.status ?? 0;
     const body = error.response?.data?.error;
+    // The API no longer accepts the token (expired or revoked session): sign in again once, rather
+    // than leaving every view on an error that a reload cannot fix (MSAL would reuse the cached account).
+    if (status === 401 && getMsal() && claimReauthAttempt()) {
+      startReauthentication();
+      return Promise.reject(reauthenticatingError());
+    }
     if (body && typeof body.message === "string") {
       const apiError = new ApiError(status, body);
       if (isAccessDenied(apiError)) accessDeniedListeners.forEach((listener) => listener(apiError));

@@ -5,6 +5,7 @@ import { useParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { endpoints } from "@/api/endpoints";
 import { Breadcrumbs, type Crumb } from "@/components/Breadcrumbs";
+import { LiveMark, LiveMetricTile } from "@/components/live";
 import { formatReading } from "@/components/resourceSignals";
 import { HealthBadge, TimeAgo } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -15,8 +16,9 @@ import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { ResourceDashboard } from "@/components/widgets/ResourceDashboard";
 import { HealthReasons } from "@/components/widgets/ResourceWidgets";
 import { AlertTableWidget } from "@/components/widgets/ResourceWidgets";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
-import type { ResourceDetail } from "@/types/api";
+import type { LiveResourceState, ResourceDetail } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { formatDateTime, formatRelative, regionName, titleCase } from "@/utils/format";
 import { paths } from "@/utils/paths";
@@ -42,7 +44,23 @@ function resourceCrumbs(r: ResourceDetail): Crumb[] {
 const READING_TONE: Record<string, string> = { critical: "text-critical", warning: "text-warning" };
 
 /** The type-specific health metrics from the last evaluation: the numbers that decide this resource's status. */
-function KeyMetrics({ resource }: { resource: ResourceDetail }) {
+function KeyMetrics({ resource, live }: { resource: ResourceDetail; live?: LiveResourceState }) {
+  if (live) {
+    if (!live.metrics.length) return null;
+    return (
+      <section aria-label="Live metrics" className="mb-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {live.metrics.map((m) => (
+            <LiveMetricTile key={m.key} metric={m} />
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Live: the last 60 minutes at 1-minute resolution, latest value shown. Status uses each health rule&apos;s window and thresholds. Azure
+          Monitor publishes metrics a minute or two behind.
+        </p>
+      </section>
+    );
+  }
   const readings = resource.health_metrics ?? [];
   if (!readings.length) return null;
   return (
@@ -83,8 +101,10 @@ function AssignmentEditor({ resource }: { resource: ResourceDetail }) {
   const mutation = useMutation({
     mutationFn: () => endpoints.assign(resource.id, { project_id: projectId || null, environment_id: envId || null }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["resource", resource.id] });
-      void qc.invalidateQueries({ queryKey: ["projects"] });
+      // Everything that lists or counts resources by project, as after a bulk assignment.
+      for (const queryKey of [["resource", resource.id], ["resources"], ["facets"], ["overview"], ["projects"], ["project"], ["resource-counts"]]) {
+        void qc.invalidateQueries({ queryKey });
+      }
     },
   });
   return (
@@ -202,6 +222,8 @@ export function ResourceDetailPage() {
     queryFn: () => endpoints.dashboardForResource(resourceId),
     retry: false,
   });
+  const { byId } = useLiveResources(resourceId ? [resourceId] : []);
+  const live = byId[resourceId];
   const evaluate = useMutation({
     mutationFn: () => endpoints.evaluateHealth(resourceId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["resource", resourceId] }),
@@ -221,11 +243,17 @@ export function ResourceDetailPage() {
         <Card>
           <CardHeader
             title="Health"
-            description={r.health_evaluated_at ? `Evaluated ${formatDateTime(r.health_evaluated_at)}` : "Not evaluated yet"}
-            actions={<HealthBadge status={r.health_status} />}
+            description={
+              live
+                ? `Live status from the last hour of metrics. Last scheduled check: ${r.health_evaluated_at ? `${formatDateTime(r.health_evaluated_at)} (${live.evaluated_status})` : "not run yet"}`
+                : r.health_evaluated_at
+                  ? `Evaluated ${formatDateTime(r.health_evaluated_at)}`
+                  : "Not evaluated yet"
+            }
+            actions={<HealthBadge status={live?.status ?? r.health_status} />}
           />
           <CardContent className="space-y-4">
-            <HealthReasons reasons={r.health_reasons} status={r.health_status} />
+            <HealthReasons reasons={live?.reasons ?? r.health_reasons} status={live?.status ?? r.health_status} />
             {r.azure_availability_state ? (
               <p className="text-xs text-muted-foreground">Azure Resource Health: {r.azure_availability_state}</p>
             ) : null}
@@ -254,7 +282,7 @@ export function ResourceDetailPage() {
               <KeyValueTable data={r.properties} empty="No properties were captured." />
             </CardContent>
           </Card>
-          {canManage ? <AssignmentEditor resource={r} /> : null}
+          {canManage ? <AssignmentEditor key={r.id} resource={r} /> : null}
         </div>
       ),
     },
@@ -290,7 +318,8 @@ export function ResourceDetailPage() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="truncate text-xl font-semibold tracking-tight">{r.name}</h1>
-            <HealthBadge status={r.health_status} />
+            <HealthBadge status={live?.status ?? r.health_status} />
+            {live ? <LiveMark /> : null}
             <span className="text-sm text-muted-foreground">{r.type_display_name}</span>
           </div>
           <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm">
@@ -316,7 +345,7 @@ export function ResourceDetailPage() {
         </div>
       </div>
       {evaluate.isError ? <ErrorState error={evaluate.error} compact className="mb-4" /> : null}
-      <KeyMetrics resource={r} />
+      <KeyMetrics resource={r} live={live} />
       {dashboard.isError && !(dashboard.error instanceof ApiError && dashboard.error.status === 404) ? (
         <ErrorState error={dashboard.error} className="mb-4" />
       ) : null}

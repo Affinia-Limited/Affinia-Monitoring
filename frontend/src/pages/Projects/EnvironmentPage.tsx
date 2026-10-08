@@ -3,6 +3,7 @@ import { ArrowRight, CheckCircle2, ScrollText, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
+import { useRefreshInterval } from "@/stores/live";
 import { AlertsExplorer } from "@/components/AlertsExplorer";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { ConfirmButton, KpiCard, PageHeader } from "@/components/common";
@@ -10,12 +11,14 @@ import { EnvironmentResourceTable } from "@/components/EnvironmentResourceTable"
 import { Freshness } from "@/components/Freshness";
 import { HealthSummary, HealthText } from "@/components/health";
 import { EnvironmentNav } from "@/components/projects/EnvironmentNav";
+import { AsOfLastCheck, LiveMark } from "@/components/live";
 import { formatReading, keyReading, shortReason, topReason } from "@/components/resourceSignals";
 import { SeverityBadge, TimeAgo } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingBlock, TableSkeleton } from "@/components/ui/states";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import { AlertDetailDrawer } from "@/pages/Alerts/AlertDetailDrawer";
 import type { EnvironmentSummary, Project } from "@/types/api";
@@ -30,12 +33,14 @@ const ISSUE_LIMIT = 8;
 /** Only resources that need attention, worst first, each with the reason and a way in. */
 function IssuesCard({ projectId, environment }: { projectId: string; environment: EnvironmentSummary }) {
   const filters = { project_id: projectId, environment_id: environment.id, health: "critical,warning", monitored_only: true };
+  const refetchInterval = useRefreshInterval(60_000);
   const query = useQuery({
     queryKey: ["resources", { ...filters, page_size: ISSUE_LIMIT }],
     queryFn: () => endpoints.resources({ ...filters, page_size: ISSUE_LIMIT, sort: "health" }),
-    refetchInterval: 60_000,
+    refetchInterval,
   });
   const total = query.data?.total ?? 0;
+  const { byId } = useLiveResources((query.data?.items ?? []).map((r) => r.id));
   return (
     <Card>
       <CardHeader title="Issues" description="Resources currently outside their health thresholds" />
@@ -60,23 +65,31 @@ function IssuesCard({ projectId, environment }: { projectId: string; environment
       ) : (
         <ul className="divide-y divide-border/70 border-t border-border/70">
           {query.data?.items.map((r) => {
-            const reason = topReason(r.health_reasons);
+            const state = byId[r.id];
+            const status = state?.status ?? r.health_status;
+            const reason = topReason(state ? state.reasons : r.health_reasons);
             const reading = keyReading(r);
             return (
               <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <HealthText status={r.health_status} />
+                    <HealthText status={status} />
                     <Link to={paths.resource(r.id)} className="truncate text-sm font-medium hover:underline">
                       {r.name}
                     </Link>
                     <span className="text-xs text-muted-foreground">{r.type_display_name}</span>
                   </div>
-                  <p className={cn("mt-1 text-sm", r.health_status === "critical" ? "text-critical" : "text-warning")}>
-                    {reason ? shortReason(reason) : reading ? `${reading.label} ${formatReading(reading)}` : "Health signals outside thresholds"}
+                  <p className={cn("mt-1 text-sm", status === "critical" ? "text-critical" : status === "warning" ? "text-warning" : "text-healthy")}>
+                    {reason
+                      ? shortReason(reason)
+                      : state
+                        ? "Back within thresholds"
+                        : reading
+                          ? `${reading.label} ${formatReading(reading)}`
+                          : "Health signals outside thresholds"}
                   </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Checked <TimeAgo value={r.health_evaluated_at} />
+                  <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                    {state ? <LiveMark /> : <>Checked <TimeAgo value={r.health_evaluated_at} /></>}
                     {r.active_alerts ? ` · ${r.active_alerts} active alert${r.active_alerts === 1 ? "" : "s"}` : ""}
                   </p>
                 </div>
@@ -100,10 +113,11 @@ function IssuesCard({ projectId, environment }: { projectId: string; environment
 }
 
 function RecentAlerts({ projectId, environmentId, onOpenAll }: { projectId: string; environmentId: string; onOpenAll: () => void }) {
+  const refetchInterval = useRefreshInterval(60_000);
   const query = useQuery({
     queryKey: ["alerts", { status: "open", project_id: projectId, environment_id: environmentId, page_size: 5 }],
     queryFn: () => endpoints.alerts({ status: "open", project_id: projectId, environment_id: environmentId, page_size: 5 }),
-    refetchInterval: 60_000,
+    refetchInterval,
   });
   return (
     <Card>
@@ -182,7 +196,8 @@ export function EnvironmentPage() {
   const qc = useQueryClient();
   const canManage = usePermission(PERMISSIONS.manageProjects);
   const [alertId, setAlertId] = useState<string | null>(null);
-  const query = useQuery({ queryKey: ["project", projectId], queryFn: () => endpoints.project(projectId), refetchInterval: 60_000 });
+  const refetchInterval = useRefreshInterval(60_000);
+  const query = useQuery({ queryKey: ["project", projectId], queryFn: () => endpoints.project(projectId), refetchInterval });
   const requested = params.get("tab");
   const tab: Tab = TABS.includes(requested as Tab) ? (requested as Tab) : "overview";
   const setTab = (next: string) =>
@@ -279,6 +294,7 @@ export function EnvironmentPage() {
               <KpiCard label="Critical" value={counts.critical} tone={counts.critical ? "critical" : undefined} />
               <KpiCard label="Active alerts" value={environment.active_alerts} tone={environment.active_alerts ? "critical" : undefined} />
             </section>
+            <AsOfLastCheck className="-mt-3" />
             <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
               <div className="space-y-6 xl:col-span-2">
                 <IssuesCard projectId={project.id} environment={environment} />

@@ -3,8 +3,10 @@ import { ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
 import { AlertTable } from "@/components/AlertTable";
+import { LiveMark } from "@/components/live";
 import { HealthBadge } from "@/components/status";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
+import { useLiveResources } from "@/hooks/useLiveResources";
 import type { HealthReason } from "@/types/api";
 import { formatBytes, formatDateTime, formatValue, regionName } from "@/utils/format";
 import { configString, type WidgetProps } from "./types";
@@ -42,16 +44,22 @@ export function HealthReasons({ reasons, status }: { reasons: HealthReason[]; st
 }
 
 export function ResourceHealthCard({ widget, resource }: WidgetProps) {
+  // Same query as the page header, so no extra request.
+  const live = useLiveResources([resource.id]).byId[resource.id];
   return (
     <WidgetFrame title={widget.title}>
       <div className="flex items-center gap-2">
-        <HealthBadge status={resource.health_status} />
-        <span className="text-xs text-muted-foreground">
-          {resource.health_evaluated_at ? `Evaluated ${formatDateTime(resource.health_evaluated_at)}` : "Not evaluated yet"}
-        </span>
+        <HealthBadge status={live?.status ?? resource.health_status} />
+        {live ? (
+          <LiveMark />
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {resource.health_evaluated_at ? `Evaluated ${formatDateTime(resource.health_evaluated_at)}` : "Not evaluated yet"}
+          </span>
+        )}
       </div>
       <div className="mt-3">
-        <HealthReasons reasons={resource.health_reasons} status={resource.health_status} />
+        <HealthReasons reasons={live?.reasons ?? resource.health_reasons} status={live?.status ?? resource.health_status} />
       </div>
     </WidgetFrame>
   );

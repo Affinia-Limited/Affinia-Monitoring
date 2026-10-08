@@ -85,12 +85,14 @@ def _apply_filters(
     if health:
         query = query.where(Resource.health_status.in_(health.split(",")))
     if q:
-        term = f"%{q.lower().strip()}%"
+        # Escape LIKE wildcards so "%" and "_" in a search match literally.
+        escaped = q.lower().strip().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        term = f"%{escaped}%"
         query = query.where(
             or_(
-                func.lower(Resource.name).like(term),
-                func.lower(Resource.resource_group).like(term),
-                Resource.resource_type.like(term),
+                func.lower(Resource.name).like(term, escape="\\"),
+                func.lower(Resource.resource_group).like(term, escape="\\"),
+                Resource.resource_type.like(term, escape="\\"),
             )
         )
     return query
@@ -144,7 +146,8 @@ async def list_resources(
         query = query.where(Resource.monitor_key != "generic")
     total = await db.scalar(select(func.count()).select_from(query.subquery()))
     column = _SORTS[sort.lstrip("-")]
-    query = query.order_by(column.desc() if sort.startswith("-") else column.asc(), Resource.name)
+    # id last: a unique tie-breaker keeps OFFSET pages stable (names are not unique).
+    query = query.order_by(column.desc() if sort.startswith("-") else column.asc(), Resource.name, Resource.id)
     resources = list(await db.scalars(query.offset((page - 1) * page_size).limit(page_size)))
     lookups = await load_lookups(db, user.organization_id, resources)
     return Page(

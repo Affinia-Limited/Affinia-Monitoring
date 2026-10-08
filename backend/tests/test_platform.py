@@ -118,12 +118,24 @@ async def test_unhandled_errors_do_not_leak_details(client: httpx.AsyncClient, m
 
 
 def test_unsafe_modes_rejected_outside_development() -> None:
-    base = {"entra_tenant_id": "t", "entra_client_id": "c", "entra_audience": "a", "environment": "production"}
+    base = {
+        "entra_tenant_id": "t",
+        "entra_client_id": "c",
+        "entra_audience": "a",
+        "environment": "production",
+        "redis_url": "rediss://cache.example:6380/0",
+        "database_auth": "entra",
+        "database_url": "postgresql+asyncpg://app@db.example:5432/monitoring?ssl=require",
+    }
     for override in (
         {"auth_mode": "dev"},
         {"azure_provider": "mock"},
         {"task_backend": "inline"},
         {"cors_origins": ["*"]},
+        # Celery without Redis would silently fall back to localhost.
+        {"redis_url": None},
+        # The development credentials must never reach a real deployment.
+        {"database_auth": "password", "database_url": "postgresql+asyncpg://monitoring:monitoring@db:5432/monitoring"},
     ):
         with pytest.raises(ValueError):
             Settings(**{**base, "azure_provider": "azure", "task_backend": "celery", **override})
@@ -139,6 +151,14 @@ def test_unsafe_modes_rejected_outside_development() -> None:
         )
     ok = Settings(**base, azure_provider="azure", task_backend="celery", cors_origins=["https://monitor.example"])
     assert ok.is_production
+
+
+def test_environment_defaults_to_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment that forgets ENVIRONMENT must not get development's relaxed rules."""
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    with pytest.raises(ValueError, match="AUTH_MODE=dev"):
+        Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_csv_settings_parse() -> None:

@@ -20,7 +20,7 @@ Container Apps environment (internal, VNet-integrated)
         |-- Key Vault                       private endpoint, RBAC, purge protection
         '-- Azure APIs                      Resource Graph, Monitor Metrics, Log Analytics (read-only RBAC)
 Container Registry (admin user disabled, AcrPull)
-Log Analytics + Application Insights for the platform's own telemetry
+Log Analytics (container logs) and an Application Insights resource (not yet wired: the app sends no telemetry to it)
 One user-assigned managed identity for all containers
 ```
 
@@ -29,7 +29,7 @@ One user-assigned managed identity for all containers
 | Identity | User-assigned managed identity: `AZURE_CLIENT_ID` is set on every container |
 | Database auth | `DATABASE_AUTH=entra`, with a password-less `DATABASE_URL` (`?ssl=require`). The backend obtains a token for `https://ossrdbms-aad.database.windows.net/.default` for each new connection |
 | Secrets | Only the Redis URL, as a Key Vault reference. No passwords, client secrets or connection strings in templates |
-| Networking | Only Front Door is public. The API, database, Redis and Key Vault are private |
+| Networking | Front Door is the only public entry to the app. The API, database, Redis and Key Vault are private. The Container Registry (Standard SKU) keeps public network access, protected by Entra authentication with the admin user disabled |
 | Monitored subscriptions | Grant the managed identity Reader, Monitoring Reader and Log Analytics Reader ([azure-rbac.md](azure-rbac.md)) |
 
 ## CI/CD
@@ -47,12 +47,12 @@ CodeQL runs in `.github/workflows/codeql.yml`. Dependabot covers pip, npm, GitHu
 
 ### Deploy (`.github/workflows/deploy.yml`)
 
-Triggered manually or by pushing a `v*` tag, in the protected `production` GitHub environment.
+Triggered manually or by pushing a `v*` tag, in the protected `production` GitHub environment. The first job runs the whole CI workflow on the same commit; nothing is deployed unless it passes.
 
 1. `azure/login` with **OIDC federation**. There is no `AZURE_CLIENT_SECRET` anywhere. Identifiers come from GitHub environment variables.
 2. Ensure the resource group exists, then deploy the foundation (phase 1: network, identity, Key Vault, ACR, PostgreSQL, Redis, monitoring).
 3. `az acr login`, then build and push the backend, worker and frontend images tagged with the commit SHA. The frontend receives the `VITE_ENTRA_*` values as build arguments.
-4. On existing deployments, run the migration job with the new image before the apps are updated.
+4. On existing deployments, run the migration job with the new image before the apps are updated. The previous revision keeps serving while it runs, so every migration must be backward compatible with the running code (expand first, remove columns in a later release).
 5. Deploy the applications (phase 2: Container Apps, migrate job, Front Door).
 6. Make sure migrations are at head.
 

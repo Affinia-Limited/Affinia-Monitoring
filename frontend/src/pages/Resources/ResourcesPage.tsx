@@ -146,6 +146,10 @@ export function ResourcesPage() {
   const total = list.data?.total ?? 0;
   const rows = serverMode ? (serverPage.data?.items ?? []) : sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // When the total shrinks (alerts resolved, filters changed elsewhere), never strand the user on an empty page.
+  useEffect(() => {
+    if (list.data && page > pages) setPage(pages);
+  }, [list.data, page, pages]);
   const project = projects.data?.find((p) => p.id === projectId);
   const moreActive = !!(get("rg") || get("subscription"));
   const anyFilter = !!(q || get("type") || get("region") || moreActive || projectId || environmentId || view !== "all");
@@ -272,7 +276,8 @@ export function ResourcesPage() {
         ) : null}
       </div>
 
-      {list.isLoading ? (
+      {/* serverPage loads after list reports more rows than fit client side: show loading, not an empty table. */}
+      {list.isLoading || (serverMode && serverPage.isLoading) ? (
         <LoadingBlock />
       ) : list.isError ? (
         <ErrorState error={list.error} />

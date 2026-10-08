@@ -179,14 +179,24 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
     alert_rows = (
         await db.execute(
             select(Alert.severity, func.count())
-            .where(Alert.organization_id == org, Alert.status.in_(["active", "acknowledged"]))
+            .join(Resource, Resource.id == Alert.resource_id)
+            .where(
+                Alert.organization_id == org,
+                Alert.status.in_(["active", "acknowledged"]),
+                Resource.deleted_at.is_(None),
+            )
             .group_by(Alert.severity)
         )
     ).all()
     recent_alerts = list(
         await db.scalars(
             select(Alert)
-            .where(Alert.organization_id == org, Alert.status.in_(["active", "acknowledged"]))
+            .join(Resource, Resource.id == Alert.resource_id)
+            .where(
+                Alert.organization_id == org,
+                Alert.status.in_(["active", "acknowledged"]),
+                Resource.deleted_at.is_(None),
+            )
             .order_by(Alert.started_at.desc())
             .limit(10)
         )

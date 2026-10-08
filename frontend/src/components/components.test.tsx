@@ -2,10 +2,13 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/api/client";
 import { alert, metric, resource, widget } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 import { server } from "@/test/server";
 import { AlertTable } from "./AlertTable";
+import { ConfirmButton } from "./common";
+import { EnvironmentResourceTable } from "./EnvironmentResourceTable";
 import { HealthBadge } from "./status";
 import { DashboardRenderer } from "./widgets/DashboardRenderer";
 import { MetricCard, MetricValue } from "./widgets/MetricWidgets";
@@ -96,8 +99,8 @@ describe("AlertTable", () => {
     expect(within(row).getByText("Critical")).toBeInTheDocument();
     expect(within(row).getByText("CRM")).toBeInTheDocument();
     expect(within(row).getByText("Production")).toBeInTheDocument();
-    expect(within(row).getByText("94")).toBeInTheDocument();
-    expect(within(row).getByText("> 90")).toBeInTheDocument();
+    expect(within(row).getByText("94%")).toBeInTheDocument();
+    expect(within(row).getByText("> 90%")).toBeInTheDocument();
     expect(within(row).getByText("10 minutes ago")).toBeInTheDocument();
     expect(within(row).getByText("Active")).toBeInTheDocument();
     await userEvent.click(row);
@@ -107,5 +110,43 @@ describe("AlertTable", () => {
   it("shows an empty state", () => {
     renderWithProviders(<AlertTable alerts={[]} emptyMessage="No active alerts." />);
     expect(screen.getByText("No active alerts.")).toBeInTheDocument();
+  });
+});
+
+describe("ConfirmButton", () => {
+  it("keeps the dialog open and explains a failed action", async () => {
+    const onConfirm = vi.fn(async () => {
+      throw new ApiError(409, { code: "CONFLICT", message: "The project still has environments.", request_id: "req-1" });
+    });
+    renderWithProviders(
+      <ConfirmButton title="Delete project?" description="This cannot be undone." confirmLabel="Delete" onConfirm={onConfirm}>
+        Delete project
+      </ConfirmButton>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Delete project" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The project still has environments.");
+    expect(within(dialog).getByRole("button", { name: "Delete" })).toBeEnabled();
+  });
+});
+
+describe("EnvironmentResourceTable paging", () => {
+  it("returns to the last page when the total shrinks", async () => {
+    let total = 30;
+    server.use(
+      http.get("*/api/v1/resources", ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get("page"));
+        const items = page === 1 ? [resource] : total > 25 ? [{ ...resource, id: "r26", name: "page-two" }] : [];
+        return HttpResponse.json({ items, total, page, page_size: 25 });
+      }),
+      http.get("*/api/v1/resources/facets", () => HttpResponse.json({ health: [], resource_types: [], locations: [], resource_groups: [], subscriptions: [] })),
+    );
+    renderWithProviders(<EnvironmentResourceTable projectId="p1" environmentId="e1" />);
+    await screen.findByText("Page 1 of 2");
+    total = 3;
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(await screen.findByText("Page 1 of 1")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "app-crm-prod-uks" })).toBeInTheDocument();
   });
 });

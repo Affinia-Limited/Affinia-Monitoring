@@ -1,10 +1,12 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { isPreset, type TimeRangeValue } from "@/utils/timeRange";
+import { useLiveMode } from "./live";
 
 interface FilterState {
   projectId: string | null;
   environmentId: string | null;
+  /** While Live is on this is always the last hour (1-minute points); the chosen range returns afterwards. */
   timeRange: TimeRangeValue;
   setProject: (id: string | null) => void;
   setEnvironment: (id: string | null) => void;
@@ -16,6 +18,7 @@ const FilterContext = createContext<FilterState | null>(null);
 /** Global filters (project, environment, time range) kept in the URL so views are shareable. */
 export function FilterProvider({ children }: { children: ReactNode }) {
   const [params, setParams] = useSearchParams();
+  const { live } = useLiveMode();
 
   const update = useCallback(
     (changes: Record<string, string | null | undefined>) => {
@@ -39,11 +42,13 @@ export function FilterProvider({ children }: { children: ReactNode }) {
     return {
       projectId: params.get("project"),
       environmentId: params.get("env"),
-      timeRange: {
-        preset: isPreset(preset) ? preset : "24h",
-        start: params.get("start") ?? undefined,
-        end: params.get("end") ?? undefined,
-      },
+      timeRange: live
+        ? { preset: "1h" }
+        : {
+            preset: isPreset(preset) ? preset : "24h",
+            start: params.get("start") ?? undefined,
+            end: params.get("end") ?? undefined,
+          },
       setProject: (id) => update({ project: id, env: null }),
       setEnvironment: (id) => update({ env: id }),
       setTimeRange: (r) =>
@@ -53,7 +58,7 @@ export function FilterProvider({ children }: { children: ReactNode }) {
           end: r.preset === "custom" ? r.end : null,
         }),
     };
-  }, [params, update]);
+  }, [params, update, live]);
 
   return <FilterContext.Provider value={value}>{children}</FilterContext.Provider>;
 }

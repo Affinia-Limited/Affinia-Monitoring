@@ -13,13 +13,18 @@ logger = logging.getLogger(__name__)
 
 def _run(coro: Any) -> Any:
     async def _wrapped() -> Any:
+        from app.core.cache import reset_cache
         from app.db.session import dispose_engine
+        from app.services.azure.provider import close_azure_services
 
         try:
             return await coro
         finally:
-            # Engines are bound to the loop; dispose so the next task gets a clean pool.
+            # The DB pool, the Redis client and the Azure credential/transport are all bound to this
+            # event loop; release them so the next task (a new loop) does not reuse dead connections.
             await dispose_engine()
+            await reset_cache()
+            await close_azure_services()
 
     return asyncio.run(_wrapped())
 

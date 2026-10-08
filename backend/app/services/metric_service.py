@@ -109,14 +109,14 @@ class MetricService:
         relation = definition.target.split(":", 1)[1]
         return await related_resource(self._db, resource, relation)
 
-    async def _fetch(
-        self, tenant_id: str, target: Resource, definition: MetricDef, time_range: TimeRange, interval: timedelta
-    ) -> MetricResult | None:
-        request = MetricRequest(definition.name, definition.aggregation, definition.namespace, definition.split_by)
-        key = cache_key(
+    @staticmethod
+    def _cache_key(
+        tenant_id: str, azure_id: str, request: MetricRequest, time_range: TimeRange, interval: timedelta
+    ) -> str:
+        return cache_key(
             "metrics",
             tenant_id,
-            target.azure_id,
+            azure_id,
             request.name,
             request.aggregation,
             request.namespace,
@@ -125,6 +125,12 @@ class MetricService:
             time_range.end.isoformat(),
             interval.total_seconds(),
         )
+
+    async def _fetch(
+        self, tenant_id: str, target: Resource, definition: MetricDef, time_range: TimeRange, interval: timedelta
+    ) -> MetricResult | None:
+        request = _request(definition)
+        key = self._cache_key(tenant_id, target.azure_id, request, time_range, interval)
         cache = get_cache()
         cached = await cache.get(key)
         if cached is not None:
@@ -175,16 +181,9 @@ class MetricService:
             result = await self._fetch(tenant_id, target, definition, time_range, interval)
         except AppError as exc:
             # One unavailable metric must not break a whole dashboard.
-            data.unavailable_reason = exc.code
-            data.unavailable_message = exc.message
+            _unavailable(data, exc)
             return
-        if result is None or not result.series:
-            data.unavailable_reason = "NO_DATA"
-            data.unavailable_message = "Azure returned no data for this metric."
-        else:
-            data.series = _normalise(definition, result)
-            data.summary = _summarise(data.series)
-            data.is_mock = result.is_mock
+        _apply(data, definition, result)
 
     async def get_metrics(
         self,
@@ -210,25 +209,70 @@ class MetricService:
         interval: timedelta,
         concurrency: int = 8,
     ) -> list[list[MetricData]]:
-        """``get_metrics`` for many ``(resource, tenant_id, keys)`` at once.
+        """``get_metrics`` for many ``(resource, tenant_id, keys)`` at once, with fewer Azure calls.
 
-        Related-resource lookups run one at a time on the shared session; the Azure
-        calls then run concurrently, at most ``concurrency`` in flight.
+        Related-resource lookups run one at a time on the shared session. Cached metrics are
+        served from the cache; the rest are batched into one Azure Monitor request per target
+        resource, namespace and granularity (dimension-split metrics are fetched on their own),
+        with at most ``concurrency`` requests in flight.
         """
         prepared: list[list[tuple[str, MetricData, MetricDef, Resource | None, timedelta]]] = []
         for resource, tenant_id, keys in requests:
             prepared.append([(tenant_id, *await self._prepare(resource, key, interval)) for key in keys])
+
+        cache = get_cache()
+        batches: dict[
+            tuple[str, str, str | None, timedelta], list[tuple[MetricData, MetricDef, MetricRequest, str]]
+        ] = {}
+        singles: list[tuple[str, MetricData, MetricDef, Resource, timedelta]] = []
+        for group in prepared:
+            for tenant_id, data, definition, target, step in group:
+                if target is None:
+                    continue
+                request = _request(definition)
+                key = self._cache_key(tenant_id, target.azure_id, request, time_range, step)
+                cached = await cache.get(key)
+                if cached is not None:
+                    _apply(data, definition, _result_from_cache(cached))
+                elif request.split_by:
+                    singles.append((tenant_id, data, definition, target, step))
+                else:
+                    batch = batches.setdefault((tenant_id, target.azure_id, request.namespace, step), [])
+                    batch.append((data, definition, request, key))
+
         gate = asyncio.Semaphore(concurrency)
 
-        async def run(
-            tenant_id: str, data: MetricData, definition: MetricDef, target: Resource | None, step: timedelta
+        async def run_batch(
+            tenant_id: str,
+            azure_id: str,
+            step: timedelta,
+            members: list[tuple[MetricData, MetricDef, MetricRequest, str]],
         ) -> None:
-            if target is None:
+            unique = list({(m[2].name.lower(), m[2].aggregation): m[2] for m in members}.values())
+            try:
+                async with gate:
+                    results = await self._azure.metrics.query(tenant_id, azure_id, unique, time_range, step)
+            except AppError as exc:
+                for data, *_ in members:
+                    _unavailable(data, exc)
                 return
+            by_name = {(r.name.lower(), r.aggregation): r for r in results}
+            for data, definition, request, key in members:
+                result = by_name.get((request.name.lower(), request.aggregation))
+                if result is not None:
+                    await cache.set(key, _result_to_cache(result), self._settings.cache_ttl_metrics)
+                _apply(data, definition, result)
+
+        async def run_single(
+            tenant_id: str, data: MetricData, definition: MetricDef, target: Resource, step: timedelta
+        ) -> None:
             async with gate:
                 await self._complete(data, definition, tenant_id, target, time_range, step)
 
-        await asyncio.gather(*(run(*item) for group in prepared for item in group))
+        await asyncio.gather(
+            *(run_batch(t, azure_id, step, members) for (t, azure_id, _, step), members in batches.items()),
+            *(run_single(*item) for item in singles),
+        )
         return [[item[1] for item in group] for group in prepared]
 
     async def window_value(
@@ -242,6 +286,25 @@ class MetricService:
             return None, data.unavailable_reason
         values = [p["value"] for s in data.series[:1] for p in s["points"] if p["value"] is not None]
         return reduce_values(values, reducer), None
+
+
+def _request(definition: MetricDef) -> MetricRequest:
+    return MetricRequest(definition.name, definition.aggregation, definition.namespace, definition.split_by)
+
+
+def _unavailable(data: MetricData, exc: AppError) -> None:
+    data.unavailable_reason = exc.code
+    data.unavailable_message = exc.message
+
+
+def _apply(data: MetricData, definition: MetricDef, result: MetricResult | None) -> None:
+    if result is None or not result.series:
+        data.unavailable_reason = "NO_DATA"
+        data.unavailable_message = "Azure returned no data for this metric."
+    else:
+        data.series = _normalise(definition, result)
+        data.summary = _summarise(data.series)
+        data.is_mock = result.is_mock
 
 
 def _window(minutes: int) -> tuple[Any, Any]:

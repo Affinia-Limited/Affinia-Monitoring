@@ -80,11 +80,13 @@ async def _rate_limit(key: str, limit: int) -> None:
         raise RateLimitedError()
 
 
-async def _auth_failure_limit(request: Request, *, record: bool) -> None:
-    """Per-IP budget for failed authentications and access denials (slows token and identity probing)."""
-    key = f"amp:rl:authfail:{client_ip(request) or 'unknown'}:{int(time.time() // 60)}"
-    cache = get_cache()
-    count = await cache.incr(key, 70) if record else int(await cache.get(key) or 0)
+async def _record_auth_failure(key: str) -> None:
+    """Count a failed authentication or access denial; over budget, answer 429 instead of 401/403.
+
+    Only failures are counted and a valid token is never checked against the budget, so nobody
+    (including an anonymous client sharing the same proxy IP) can lock legitimate users out.
+    """
+    count = await get_cache().incr(f"amp:rl:authfail:{key}:{int(time.time() // 60)}", 70)
     if count > get_settings().rate_limit_auth_failures_per_minute:
         raise RateLimitedError()
 
@@ -93,7 +95,6 @@ async def get_principal(request: Request) -> TokenPrincipal:
     settings = get_settings()
     if settings.auth_mode is AuthMode.dev:
         return DEV_PRINCIPAL
-    await _auth_failure_limit(request, record=False)
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
     try:
@@ -101,7 +102,7 @@ async def get_principal(request: Request) -> TokenPrincipal:
             raise AuthenticationError()
         return await get_validator().validate(token.strip())
     except (AuthenticationError, PermissionDeniedError):
-        await _auth_failure_limit(request, record=True)
+        await _record_auth_failure(f"ip:{client_ip(request) or 'unknown'}")
         raise
 
 
@@ -113,7 +114,8 @@ async def get_current_user(
     try:
         user, is_new_session = await resolve_member(db, principal, request)
     except AccessNotGrantedError:
-        await _auth_failure_limit(request, record=True)
+        # A genuine identity without access: budget it per identity, not per (possibly shared) IP.
+        await _record_auth_failure(f"principal:{principal.tenant_id}:{principal.object_id}")
         raise
     if settings.auth_mode is AuthMode.dev:
         user.role_key = Role(settings.dev_user_role).value

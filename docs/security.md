@@ -5,7 +5,7 @@
 | Asset | Threat | Primary controls |
 | --- | --- | --- |
 | Read access to customer Azure estates | Credential theft, over-privileged identity | No stored credentials; managed/workload identity; read-only RBAC only |
-| Monitoring data (metrics, logs) | Cross-organisation or cross-resource disclosure | Organisation scoping on every query; resource-centric log queries; KQL guard |
+| Monitoring data (metrics, logs) | Cross-organisation or cross-resource disclosure | Organisation scoping on every query; a subscription belongs to one organisation, and only to one approved for its home tenant; resource-centric log queries; KQL guard |
 | The API | Forged or replayed tokens, privilege escalation | Full Entra token validation; server-side RBAC; no self or upward role changes |
 | Notification endpoints | Leaking webhook URLs | Key Vault secret references only |
 | Logs and audit trail | Token or secret leakage | Redaction; sanitised audit details |
@@ -26,9 +26,10 @@
 
 - Entra access tokens are fully validated (RS256 signature against the tenant JWKS, issuer, audience, `exp`/`nbf`/`iat`, tenant allow-list, required scope or app role). See [entra-id.md](entra-id.md). Tokens are never logged, stored or returned.
 - **Admin-controlled membership.** A valid Entra token proves identity only. Every protected request must also map to an approved user with status `active`, looked up by the immutable `(organisation, tid, oid)`. Unknown, pending (unredeemed), suspended and deactivated users get `403 ACCESS_NOT_GRANTED` (or `ACCESS_SUSPENDED`) from the central `get_current_user` dependency, so direct API calls cannot bypass it. Email only matches an unbound, unexpired invitation in the same organisation and tenant. The first Super Admin comes from tenant-validated configuration, never from "first to sign in". See [user-access-management.md](user-access-management.md).
-- **No user enumeration.** Every refusal returns the same generic message. The reason is recorded only in the audit log (throttled to once per identity and reason every 10 minutes). Failed authentications and denials are rate limited per IP (`RATE_LIMIT_AUTH_FAILURES_PER_MINUTE`).
+- **No user enumeration.** Every refusal returns the same generic message. The reason is recorded only in the audit log (throttled to once per identity and reason every 10 minutes). Failed authentications are rate limited per client IP and access denials per identity (`RATE_LIMIT_AUTH_FAILURES_PER_MINUTE`). Only failures are counted, and a valid token is never checked against the budget, so nobody can lock legitimate users out by flooding from a shared (proxy) IP. Unknown signing-key IDs refresh the tenant's keys at most once a minute.
 - Every protected endpoint declares its permission and enforces it in FastAPI (`require(Permission.x)`). The UI's permission checks only hide controls. Denials are audited (`authorization.denied`).
 - **Organisation isolation.** Every query filters by the caller's `organization_id`. Resources, projects, connections and alerts in another organisation return 404. Tests cover this.
+- **Subscription ownership.** The platform identity can often read many organisations' subscriptions (for example every customer that delegated access through Lighthouse), so being readable is not proof of ownership. When a connection is created or a subscription added, the subscription must not be actively connected to another organisation (also enforced by a unique index), and its home tenant, as reported by Azure, must be the organisation's own Entra tenant or one a platform operator approved for it in `ORGANIZATION_AZURE_TENANTS` (JSON: `{"<org-tenant-id>": ["<azure-tenant-id>"]}`). The subscription picker applies the same rules. With the mock provider (demo data) the tenant rule does not apply.
 - Role changes cannot escalate: nobody can assign a role above their own, manage a user ranked above them, change their own role or status, or edit Entra-managed roles. The last active Super Admin cannot be demoted, suspended or deactivated. Users are never deleted, only suspended or deactivated, so their audit history is preserved.
 - On sign-out, the SPA clears all cached API data before calling MSAL `logoutRedirect`. When any request reports that access was revoked, it drops cached data and replaces the application with the access page.
 
@@ -41,6 +42,8 @@
   - `externaldata`, `external_table` and `materialized_view`
   - `evaluate` plugins outside an allow-list (for example `http_request` and `sql_request` are blocked)
   - queries over 10,000 characters
+
+  The checks run on the query with `//` comments removed (string literals are respected), so a comment cannot split a forbidden name from its arguments.
 - Search and severity filters are appended as escaped KQL string literals, never concatenated raw.
 - Results are capped at `LOG_QUERY_MAX_ROWS` (default 5,000), with a 60-second server timeout. Custom queries are audited (`logs.kql_executed`, query truncated to 500 characters) and rate limited (`RATE_LIMIT_KQL_PER_MINUTE`, default 30).
 
@@ -56,7 +59,7 @@
 
 ### Safe defaults
 
-- `AUTH_MODE=dev`, `AZURE_PROVIDER=mock` and `TASK_BACKEND=inline` are refused at start-up unless `ENVIRONMENT` is `development` or `test`. `AUTH_MODE=entra` requires the Entra settings.
+- `ENVIRONMENT` defaults to `production`, so a deployment that omits it gets production rules. `AUTH_MODE=dev`, `AZURE_PROVIDER=mock` and `TASK_BACKEND=inline` are refused at start-up unless `ENVIRONMENT` is `development` or `test`. `AUTH_MODE=entra` requires the Entra settings. Outside development, `TASK_BACKEND=celery` requires `REDIS_URL`, and the default development database credentials are refused.
 - OpenAPI documentation is disabled in production.
 - Discovery stores only an allow-list of resource properties, never full ARM `properties`. Tags prefixed `hidden-` are dropped.
 - Logs redact bearer tokens, JWTs and secret-bearing query parameters. Azure SDK HTTP logging is suppressed. Audit `details` drop keys resembling tokens, secrets, passwords, keys, cookies or URLs, and redact string values.

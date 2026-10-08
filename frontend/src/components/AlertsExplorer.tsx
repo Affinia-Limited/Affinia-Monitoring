@@ -1,7 +1,8 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CheckCircle2, ChevronLeft, ChevronRight, Search } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { endpoints } from "@/api/endpoints";
+import { useRefreshInterval } from "@/stores/live";
 import { AlertTable } from "@/components/AlertTable";
 import { FilterChips } from "@/components/FilterChips";
 import { Button } from "@/components/ui/button";
@@ -65,17 +66,22 @@ export function AlertsExplorer({
     monitor_key: monitorKey || undefined,
     since_hours: since || undefined,
   };
+  const refetchInterval = useRefreshInterval(60_000);
   const query = useQuery({
     queryKey: ["alerts", { ...filters, page }],
     queryFn: () => endpoints.alerts({ ...filters, page, page_size: PAGE_SIZE }),
     placeholderData: keepPreviousData,
-    refetchInterval: 60_000,
+    refetchInterval,
   });
   const reset = <T,>(setter: (v: T) => void) => (v: T) => {
     setter(v);
     setPage(1);
   };
   const pages = Math.max(1, Math.ceil((query.data?.total ?? 0) / PAGE_SIZE));
+  // When the total shrinks (alerts resolved, filters changed elsewhere), never strand the user on an empty page.
+  useEffect(() => {
+    if (query.data && page > pages) setPage(pages);
+  }, [query.data, page, pages]);
   const selectedProject = projects.data?.find((p) => p.id === scopeProject);
   const filtered = Boolean(q || monitorKey || since || severity !== "all" || (showScopeFilters && (scopeProject || scopeEnv)));
 

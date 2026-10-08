@@ -226,3 +226,14 @@ async def test_gauges_carry_health_thresholds_and_templates_upgrade(client: http
     async with session_scope() as db:
         template = await db.scalar(select(DashboardTemplate).where(DashboardTemplate.key == "front_door.default"))
         assert template is not None and template.version == old_version + 1
+
+
+async def test_widget_settings_are_size_limited(client: httpx.AsyncClient) -> None:
+    await seeded(client)
+    app = await find_resource(client, "app-crm-prod-uks")
+    dashboard = (await client.get(f"/api/v1/dashboards/by-resource/{app['id']}", headers=auth_headers("viewer"))).json()
+    widget = {"section": "Overview", "widget_type": "line_chart", "title": "Huge", "config": {"metrics": ["x" * 5000]}}
+    response = await client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}", json={"widgets": [widget]}, headers=auth_headers("admin")
+    )
+    assert response.status_code == 422

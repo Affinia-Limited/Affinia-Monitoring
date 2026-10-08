@@ -97,7 +97,9 @@ Only platform-evaluated rules are supported. Alerts defined in Azure Monitor its
 | `slack` | Implemented | `{"text": ...}` POST to a Slack incoming webhook |
 | `email` | Placeholder | Always fails with "Email delivery is not configured in this deployment." |
 
-Endpoint URLs are secrets and are **not stored in the database**. A channel holds `secret_ref`, the name of a Key Vault secret whose value is the HTTPS URL. The URL is read with the managed identity at send time. Channel settings that look like URLs are rejected, and non-HTTPS endpoints are refused. In development without Key Vault, the secret can come from an environment variable `SECRET_<NAME>`, for example `SECRET_OPS_TEAMS_HOOK` for `ops-teams-hook`. That fallback is disabled outside development and test.
+Endpoint URLs are secrets and are **not stored in the database**. A channel holds `secret_ref`, the name of a Key Vault secret whose value is the HTTPS URL. The URL is read with the managed identity at send time. Channel settings that look like URLs are rejected, and non-HTTPS endpoints are refused. The platform Key Vault is shared by every organisation, so **a channel's secret name must start with the organisation's slug and a hyphen**, for example `contoso-teams-ops` for the organisation `contoso`; other names are rejected when the channel is created. Delivery is refused for endpoints that resolve to loopback, private, link-local, reserved or multicast addresses. The channel test reports one generic failure message whatever went wrong (missing secret, non-HTTPS URL, refused address or HTTP error), so it cannot be used to probe Key Vault; the specific reason is in the API logs.
+
+In development without Key Vault, the secret can come from an environment variable `SECRET_<NAME>`, for example `SECRET_CONTOSO_TEAMS_OPS` for `contoso-teams-ops`. That fallback is disabled outside development and test.
 
 Delivery failures never stop evaluation. They are recorded as `notification_failed` events. `POST /api/v1/notification-channels/{id}/test` sends a test message.
 
@@ -132,6 +134,8 @@ Preset time ranges end on the current minute, so cache keys are stable within a 
 | `GET /ready` | Readiness. Database `SELECT 1` (with latency) and Redis ping when configured. Returns 503 if degraded |
 | `GET /health` | Readiness checks plus environment, Azure provider and uptime |
 | `GET /metrics` | Prometheus text format. **Restrict it at the ingress**; it is unauthenticated |
+
+These probes are served by the API container only; the public nginx front end proxies `/api` alone, so they are not reachable from the internet.
 
 Metrics from `app/core/metrics.py`, counted per process:
 

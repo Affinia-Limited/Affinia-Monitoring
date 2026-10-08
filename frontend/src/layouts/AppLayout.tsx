@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { LoadingBlock } from "@/components/ui/states";
 import { cn } from "@/utils/cn";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -46,7 +48,13 @@ export function AppLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onToggleSidebar={() => setCollapsedPref((c) => !c)} onOpenMobileNav={() => setMobileOpen(true)} />
         <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 md:px-8">
-          <Outlet />
+          <Suspense fallback={<LoadingBlock label="Loading page" />}>
+            <ErrorBoundary resetKey={location.pathname}>
+            <Suspense fallback={<LoadingBlock label="Loading page" />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
+          </Suspense>
         </main>
       </div>
     </div>
