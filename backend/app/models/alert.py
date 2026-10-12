@@ -23,7 +23,12 @@ from app.db.base import Base, SoftDelete, Timestamps, UUIDPrimaryKey
 
 
 class HealthThreshold(UUIDPrimaryKey, Timestamps, Base):
-    """Organisation override of a monitor's default health rule."""
+    """Organisation customisation of a monitor's health rule, which is also its alert template rule.
+
+    Health status uses ``warning_threshold``/``critical_threshold``; alert templates use all three
+    tiers. When a row exists it is authoritative (``info_threshold`` ``None`` = no informational
+    tier); without a row the monitor's recommended values apply.
+    """
 
     __tablename__ = "health_thresholds"
     __table_args__ = (
@@ -35,6 +40,9 @@ class HealthThreshold(UUIDPrimaryKey, Timestamps, Base):
     metric_name: Mapped[str] = mapped_column(String(120))
     warning_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     critical_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    info_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: ``None``: the rule's recommended window.
+    window_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -128,3 +136,36 @@ class AlertEvent(UUIDPrimaryKey, Timestamps, Base):
     message: Mapped[str] = mapped_column(Text, default="")
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)
+
+
+class AlertTemplateAssignment(UUIDPrimaryKey, Timestamps, SoftDelete, Base):
+    """Applies the recommended alert templates to a resource, an environment, a project or everything.
+
+    A resource is covered by its most specific enabled assignment (resource > environment > project >
+    organisation), which may override individual rules for the resources it covers.
+    """
+
+    __tablename__ = "alert_template_assignments"
+    __table_args__ = (
+        # One active assignment per scope. scope_key is "resource:<id>", "environment:<id>",
+        # "project:<id>" or "organization", so the rule holds without relying on NULL handling.
+        Index(
+            "uq_alert_template_assignments_scope",
+            "organization_id",
+            "scope_key",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    scope_key: Mapped[str] = mapped_column(String(80))
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("resources.id"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("projects.id"), nullable=True)
+    environment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("environments.id"), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: "<monitor_key>:<metric>" -> {"enabled"?, "info"?, "warning"?, "critical"?}
+    overrides: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    notification_channel_ids: Mapped[list[Any]] = mapped_column(default=list)
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)

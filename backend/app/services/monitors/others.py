@@ -31,7 +31,7 @@ class StorageAccountMonitor(AzureResourceMonitor):
         MetricDef("egress", "Egress", "Egress", "bytes", "Total"),
         MetricDef("used_capacity", "UsedCapacity", "Used capacity", "bytes", "Average", min_interval_minutes=60),
     )
-    health_rules = (HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60),)
+    health_rules = (HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60, info=99.95),)
     summary_metrics = ("availability", "transactions", "e2e_latency", "used_capacity")
 
 
@@ -48,8 +48,8 @@ class KeyVaultMonitor(AzureResourceMonitor):
         MetricDef("saturation", "SaturationShoebox", "Saturation", "percent", "Average"),
     )
     health_rules = (
-        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60),
-        HealthRule("saturation", "gt", 75, 90),
+        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60, info=99.95),
+        HealthRule("saturation", "gt", 75, 90, info=60),
     )
     summary_metrics = ("availability", "api_hits", "api_latency", "saturation")
 
@@ -84,8 +84,8 @@ class CosmosDbMonitor(AzureResourceMonitor):
         MetricDef("data_usage", "DataUsage", "Data usage", "bytes", "Total"),
     )
     health_rules = (
-        HealthRule("normalized_ru", "gt", 80, 95, reducer="max"),
-        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60),
+        HealthRule("normalized_ru", "gt", 80, 95, reducer="max", info=70),
+        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60, info=99.95),
     )
     summary_metrics = ("requests", "normalized_ru", "server_latency", "availability")
 
@@ -105,8 +105,8 @@ class RedisMonitor(AzureResourceMonitor):
         MetricDef("errors", "errors", "Errors", "count", "Maximum"),
     )
     health_rules = (
-        HealthRule("server_load", "gt", 80, 95, reducer="max"),
-        HealthRule("memory", "gt", 80, 95, reducer="max"),
+        HealthRule("server_load", "gt", 80, 95, reducer="max", info=70),
+        HealthRule("memory", "gt", 80, 95, reducer="max", info=70),
     )
     summary_metrics = ("server_load", "memory", "clients", "hits")
 
@@ -126,7 +126,7 @@ class VirtualMachineMonitor(AzureResourceMonitor):
         MetricDef("availability", "VmAvailabilityMetric", "VM availability", "percent", "Average", scale=100.0),
     )
     health_rules = (
-        HealthRule("cpu", "gt", 80, 90),
+        HealthRule("cpu", "gt", 80, 90, info=70),
         HealthRule("availability", "lt", 100, 50, description="VM availability (%)"),
     )
     summary_metrics = ("cpu", "available_memory", "network_in", "network_out")
@@ -158,8 +158,8 @@ class AksMonitor(AzureResourceMonitor):
         ),
     )
     health_rules = (
-        HealthRule("node_cpu", "gt", 80, 90),
-        HealthRule("node_memory", "gt", 85, 95),
+        HealthRule("node_cpu", "gt", 80, 90, info=70),
+        HealthRule("node_memory", "gt", 85, 95, info=75),
     )
     summary_metrics = ("node_cpu", "node_memory", "inflight_requests")
 
@@ -179,8 +179,8 @@ class ServiceBusMonitor(AzureResourceMonitor):
         MetricDef("throttled", "ThrottledRequests", "Throttled requests", "count", "Total"),
     )
     health_rules = (
-        HealthRule("dead_lettered", "gt", 10, 1000, reducer="max", description="Dead-lettered messages"),
-        HealthRule("server_errors", "gt", 10, 50, reducer="sum", description="Server errors in 15 minutes"),
+        HealthRule("dead_lettered", "gt", 10, 1000, reducer="max", description="Dead-lettered messages", info=1),
+        HealthRule("server_errors", "gt", 10, 50, reducer="sum", description="Server errors in 15 minutes", info=1),
     )
     summary_metrics = ("incoming", "outgoing", "active", "dead_lettered")
 
@@ -199,8 +199,8 @@ class EventHubsMonitor(AzureResourceMonitor):
         MetricDef("server_errors", "ServerErrors", "Server errors", "count", "Total"),
     )
     health_rules = (
-        HealthRule("throttled", "gt", 10, 100, reducer="sum", description="Throttled requests in 15 minutes"),
-        HealthRule("server_errors", "gt", 10, 50, reducer="sum", description="Server errors in 15 minutes"),
+        HealthRule("throttled", "gt", 10, 100, reducer="sum", description="Throttled requests in 15 minutes", info=1),
+        HealthRule("server_errors", "gt", 10, 50, reducer="sum", description="Server errors in 15 minutes", info=1),
     )
     summary_metrics = ("incoming", "outgoing", "throttled")
 
@@ -223,7 +223,7 @@ class ApplicationGatewayMonitor(AzureResourceMonitor):
     )
     health_rules = (
         HealthRule("unhealthy_hosts", "gt", 0, 1, reducer="max"),
-        HealthRule("failed_requests", "gt", 10, 100, reducer="sum"),
+        HealthRule("failed_requests", "gt", 10, 100, reducer="sum", info=1),
     )
     summary_metrics = ("requests", "failed_requests", "healthy_hosts", "total_time")
 
@@ -241,8 +241,8 @@ class LoadBalancerMonitor(AzureResourceMonitor):
         MetricDef("snat_connections", "SnatConnectionCount", "SNAT connections", "count", "Total"),
     )
     health_rules = (
-        HealthRule("data_path_availability", "lt", 99, 90),
-        HealthRule("health_probe_status", "lt", 90, 50),
+        HealthRule("data_path_availability", "lt", 99, 90, info=99.9),
+        HealthRule("health_probe_status", "lt", 90, 50, info=99),
     )
     summary_metrics = ("data_path_availability", "health_probe_status", "bytes")
 

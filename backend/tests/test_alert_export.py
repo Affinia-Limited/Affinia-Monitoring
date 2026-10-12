@@ -144,7 +144,9 @@ async def test_overrides_and_disabled_rules_are_respected(client: httpx.AsyncCli
 
     cpu = _find(body, "amp-asp-crm-prod-uks-cpu-warning")
     assert _criterion(cpu)["threshold"] == 70
-    assert "organisation override" in cpu["properties"]["description"]
+    assert "organisation customisation" in cpu["properties"]["description"]
+    # The recommended info tier (70) is not below the new warning of 70, so it is dropped.
+    assert "amp-asp-crm-prod-uks-cpu-info" not in {a["name"] for a in _all_alerts(body)}
     names = {a["name"] for a in _all_alerts(body)}
     # The override removed the critical threshold, and the disabled rule exports nothing.
     assert "amp-asp-crm-prod-uks-cpu-critical" not in names

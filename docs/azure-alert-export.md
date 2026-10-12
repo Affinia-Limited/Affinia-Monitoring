@@ -8,7 +8,7 @@ Open **Alerts > Export to Azure** (users with `alerts:manage`), choose a scope, 
 
 | Source | Alerts |
 | --- | --- |
-| Health thresholds | For every monitored resource in scope, each health rule of its monitor plugin with your organisation's overrides (Settings > Health rules): a **warning** alert (Azure severity 2) and a **critical** alert (severity 0) where that threshold is set. Disabled rules are skipped |
+| Alert templates | For every monitored resource in scope, each rule of its type's alert template with your organisation's customised thresholds and, when an assignment covers the resource, that assignment's overrides: an **informational** alert (Azure severity 3), a **warning** alert (severity 2) and a **critical** alert (severity 0) where that tier is set. Disabled rules are skipped. With `covered_only=true`, only resources an assignment covers are exported, matching what the platform itself alerts on |
 | Custom alert rules | Every enabled rule (Alerts > Rules) for the resources in its scope (monitor, and optionally resource, project and environment). Severity critical = 0, warning = 2, info = 3 |
 
 Each template also contains one **action group** with an email receiver per recipient. Every alert notifies it when it fires and when it resolves (`autoMitigate`). The template parameters let you change the action group name, its 12-character short name (shown in emails), the recipients and whether the alerts are deployed enabled.

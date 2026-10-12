@@ -1,6 +1,13 @@
 """Import every model so Alembic and ``Base.metadata`` see the full schema."""
 
-from app.models.alert import Alert, AlertEvent, AlertRule, HealthThreshold, NotificationChannel
+from app.models.alert import (
+    Alert,
+    AlertEvent,
+    AlertRule,
+    AlertTemplateAssignment,
+    HealthThreshold,
+    NotificationChannel,
+)
 from app.models.audit import AuditLog
 from app.models.azure import AzureConnection, Resource, ResourceGroup, Subscription, SyncRun
 from app.models.dashboard import Dashboard, DashboardTemplate, DashboardWidget
@@ -11,6 +18,7 @@ __all__ = [
     "Alert",
     "AlertEvent",
     "AlertRule",
+    "AlertTemplateAssignment",
     "AuditLog",
     "AzureConnection",
     "Dashboard",

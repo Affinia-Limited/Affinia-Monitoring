@@ -56,13 +56,13 @@ class SqlDatabaseMonitor(AzureResourceMonitor):
         MetricDef("availability", "availability", "Availability", "percent", "Average"),
     )
     health_rules = (
-        HealthRule("cpu", "gt", 80, 90, description="CPU"),
-        HealthRule("dtu", "gt", 85, 95, description="DTU consumption"),
-        HealthRule("storage_percent", "gt", 85, 95, reducer="max", description="Storage used"),
-        HealthRule("log_io", "gt", 85, 95, description="Log IO"),
-        HealthRule("deadlocks", "gt", 5, 20, reducer="sum", description="Deadlocks in 15 minutes"),
-        HealthRule("connections_failed", "gt", 10, 50, reducer="sum", description="Failed connections"),
-        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60, description="Availability (%)"),
+        HealthRule("cpu", "gt", 80, 90, description="CPU", info=70),
+        HealthRule("dtu", "gt", 85, 95, description="DTU consumption", info=75),
+        HealthRule("storage_percent", "gt", 85, 95, reducer="max", description="Storage used", info=75),
+        HealthRule("log_io", "gt", 85, 95, description="Log IO", info=75),
+        HealthRule("deadlocks", "gt", 5, 20, reducer="sum", description="Deadlocks in 15 minutes", info=1),
+        HealthRule("connections_failed", "gt", 10, 50, reducer="sum", description="Failed connections", info=1),
+        HealthRule("availability", "lt", 99.9, 99.0, window_minutes=60, description="Availability (%)", info=99.95),
     )
     log_queries = (
         LogQueryDef(
@@ -227,7 +227,7 @@ class SqlElasticPoolMonitor(AzureResourceMonitor):
         MetricDef("workers", "workers_percent", "Workers", "percent", "Average"),
     )
     health_rules = (
-        HealthRule("cpu", "gt", 80, 90),
-        HealthRule("storage_percent", "gt", 85, 95, reducer="max"),
+        HealthRule("cpu", "gt", 80, 90, info=70),
+        HealthRule("storage_percent", "gt", 85, 95, reducer="max", info=75),
     )
     summary_metrics = ("cpu", "dtu", "storage_percent")

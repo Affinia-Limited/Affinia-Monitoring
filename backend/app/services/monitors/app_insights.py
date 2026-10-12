@@ -42,9 +42,11 @@ class AppInsightsMonitor(AzureResourceMonitor):
         MetricDef("availability", "availabilityResults/availabilityPercentage", "Availability", "percent", "Average"),
     )
     health_rules = (
-        HealthRule("availability", "lt", 99, 95, window_minutes=30, description="Availability tests (%)"),
-        HealthRule("failed_requests", "gt", 20, 100, reducer="sum", description="Failed requests in 15 minutes"),
-        HealthRule("response_time", "gt", 1000, 3000, description="Server response time (ms)"),
+        HealthRule("availability", "lt", 99, 95, window_minutes=30, description="Availability tests (%)", info=99.5),
+        HealthRule(
+            "failed_requests", "gt", 20, 100, reducer="sum", description="Failed requests in 15 minutes", info=5
+        ),
+        HealthRule("response_time", "gt", 1000, 3000, description="Server response time (ms)", info=500),
     )
     log_queries = (
         LogQueryDef(

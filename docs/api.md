@@ -136,7 +136,17 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 | POST | `/alert-rules` | `alerts:manage` |
 | PUT | `/alert-rules/{id}` | `alerts:manage` |
 | DELETE | `/alert-rules/{id}` | `alerts:manage` |
-| GET | `/alert-rules/azure-export?project_id=&environment_id=&resource_id=&include_health=&include_rules=&recipients=&action_group_name=` | `alerts:manage`. Azure Monitor metric alerts and an email action group as ARM templates, one per subscription, plus rules that could not be exported and why. See [azure-alert-export.md](azure-alert-export.md) |
+| GET | `/alert-rules/azure-export?project_id=&environment_id=&resource_id=&include_health=&include_rules=&covered_only=&recipients=&action_group_name=` | `alerts:manage`. Azure Monitor metric alerts (alert template tiers info 3 / warning 2 / critical 0, and custom rules) and an email action group as ARM templates, one per subscription, plus rules that could not be exported and why. `covered_only` limits it to resources an alert template assignment covers. See [azure-alert-export.md](azure-alert-export.md) |
+| POST | `/alert-rules/evaluate` | `alerts:manage`. Run health, alert template and alert rule evaluation now (template frequencies ignored), at most once a minute |
+| GET | `/alert-templates` | `alerts:view`. The recommended alert rules per resource type, with info, warning and critical tiers (organisation values and defaults), resource and coverage counts |
+| GET | `/alert-templates/{monitor_key}` | `alerts:view` |
+| PUT | `/alert-templates/{monitor_key}/rules/{metric}` | `alerts:manage`. `{enabled, info, warning, critical, window_minutes}`; tiers must be ordered for the rule's direction. Health status follows warning and critical |
+| DELETE | `/alert-templates/{monitor_key}/rules/{metric}` | `alerts:manage`. Back to the recommended values |
+| GET | `/alert-template-assignments?resource_id=&project_id=&environment_id=` | `alerts:view`. Where templates apply, with overrides, extra channels and how many resources each covers |
+| POST | `/alert-template-assignments` | `alerts:manage`. Scope from `resource_id`, or `project_id` (+ `environment_id`), or neither (whole organisation). 409 `ASSIGNMENT_EXISTS` with `details.id` when that scope already has one |
+| PATCH | `/alert-template-assignments/{id}` | `alerts:manage`. `enabled`, `overrides` (replaces the map), `notification_channel_ids` |
+| DELETE | `/alert-template-assignments/{id}` | `alerts:manage`. Closes template alerts no assignment covers any more |
+| GET | `/resources/{id}/alert-plan` | `alerts:view`. The template, covering assignment and effective rules of one resource, each with its current value and tier |
 | GET | `/notification-channels` | `alerts:manage` |
 | POST | `/notification-channels` | `alerts:manage` |
 | DELETE | `/notification-channels/{id}` | `alerts:manage` |
@@ -144,7 +154,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 | GET | `/health-rules` | `alerts:view` |
 | PUT | `/health-rules` | `settings:manage` |
 
-Alerts are created by the evaluator from alert rules. There is no endpoint to create an alert directly; `POST /alert-rules` creates the rule.
+Alerts are created by the evaluator from alert template assignments and alert rules. There is no endpoint to create an alert directly.
 
 ## Users and audit
 

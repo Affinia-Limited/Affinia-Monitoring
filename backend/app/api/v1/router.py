@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     alert_export,
+    alert_templates,
     alerts,
     auth,
     azure_connections,
@@ -38,6 +39,7 @@ for module in (
     dashboards,
     logs,
     alert_export,
+    alert_templates,
     alerts,
     search,
     users,

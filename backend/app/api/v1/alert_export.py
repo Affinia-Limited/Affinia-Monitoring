@@ -27,6 +27,7 @@ async def azure_export(
     resource_id: Annotated[uuid.UUID | None, Query()] = None,
     include_health: bool = True,
     include_rules: bool = True,
+    covered_only: bool = False,
     recipients: Annotated[str | None, Query(max_length=13_000)] = None,
     action_group_name_: Annotated[str | None, Query(alias="action_group_name", max_length=260)] = None,
 ) -> dict[str, Any]:
@@ -42,6 +43,7 @@ async def azure_export(
         include_rules=include_rules,
         recipients=emails,
         group_name=action_group_name(action_group_name_),
+        covered_only=covered_only,
     )
     # Counts only: recipient addresses are personal data and never written to the audit log.
     await record_audit(
@@ -56,6 +58,7 @@ async def azure_export(
             "resource_id": str(resource_id) if resource_id else None,
             "include_health": include_health,
             "include_rules": include_rules,
+            "covered_only": covered_only,
             "templates": len(result["templates"]),
             "alert_rules": sum(t["alert_count"] for t in result["templates"]),
             "resources": result["resources"],

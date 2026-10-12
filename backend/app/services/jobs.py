@@ -43,12 +43,12 @@ def enqueue_sync(sync_run_id: str) -> None:
     sync_connection.delay(sync_run_id)
 
 
-def enqueue_health(organization_id: str) -> None:
+def enqueue_health(organization_id: str, force: bool = False) -> None:
     if get_settings().task_backend is TaskBackend.inline:
         from app.services.health.evaluator import run_health_job
 
-        _run_inline(run_health_job(organization_id))
+        _run_inline(run_health_job(organization_id, force))
         return
     from app.workers.tasks import evaluate_health
 
-    evaluate_health.delay(organization_id)
+    evaluate_health.delay(organization_id, force)

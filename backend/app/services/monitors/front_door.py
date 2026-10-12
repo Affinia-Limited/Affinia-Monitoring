@@ -63,9 +63,9 @@ class FrontDoorMonitor(AzureResourceMonitor):
         ),
     )
     health_rules = (
-        HealthRule("percent_5xx", "gt", 1, 5, description="5xx rate (%)"),
-        HealthRule("origin_health", "lt", 90, 50, description="Origin health (%)"),
-        HealthRule("total_latency", "gt", 1000, 3000, description="Total latency (ms)"),
+        HealthRule("percent_5xx", "gt", 1, 5, description="5xx rate (%)", info=0.5),
+        HealthRule("origin_health", "lt", 90, 50, description="Origin health (%)", info=99),
+        HealthRule("total_latency", "gt", 1000, 3000, description="Total latency (ms)", info=500),
     )
     log_queries = (
         LogQueryDef(
@@ -196,8 +196,8 @@ class FrontDoorClassicMonitor(AzureResourceMonitor):
         ),
     )
     health_rules = (
-        HealthRule("backend_health", "lt", 90, 50, description="Backend health (%)"),
-        HealthRule("total_latency", "gt", 1000, 3000, description="Total latency (ms)"),
+        HealthRule("backend_health", "lt", 90, 50, description="Backend health (%)", info=99),
+        HealthRule("total_latency", "gt", 1000, 3000, description="Total latency (ms)", info=500),
     )
     comparison = (ComparisonMetric("requests", "sum", "Front Door requests"),)
     summary_metrics = ("requests", "total_latency", "backend_health")

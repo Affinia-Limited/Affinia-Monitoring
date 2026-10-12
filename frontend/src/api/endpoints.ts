@@ -3,7 +3,11 @@ import type {
   Alert,
   AlertDetail,
   AlertRule,
+  AlertPlan,
   AlertRuleIn,
+  AlertTemplate,
+  AlertTemplateAssignment,
+  AlertTemplateAssignmentIn,
   AuditEntry,
   AvailableSubscription,
   Comparison,
@@ -30,6 +34,8 @@ import type {
   TeamsChannel,
   TeamsChannelIn,
   TeamsSetup,
+  TemplateRule,
+  TemplateRuleIn,
   Overview,
   Page,
   PlatformIdentity,
@@ -104,6 +110,19 @@ export const endpoints = {
   createAlertRule: (body: AlertRuleIn) => send<AlertRule>("post", "/alert-rules", body),
   updateAlertRule: (id: string, body: AlertRuleIn) => send<AlertRule>("put", `/alert-rules/${id}`, body),
   deleteAlertRule: (id: string) => send<void>("delete", `/alert-rules/${id}`),
+  alertTemplates: () => get<AlertTemplate[]>("/alert-templates"),
+  alertTemplate: (monitorKey: string) => get<AlertTemplate>(`/alert-templates/${monitorKey}`),
+  updateTemplateRule: (monitorKey: string, metric: string, body: TemplateRuleIn) =>
+    send<TemplateRule>("put", `/alert-templates/${monitorKey}/rules/${metric}`, body),
+  resetTemplateRule: (monitorKey: string, metric: string) =>
+    send<TemplateRule>("delete", `/alert-templates/${monitorKey}/rules/${metric}`),
+  templateAssignments: (params: Params = {}) => get<AlertTemplateAssignment[]>("/alert-template-assignments", params),
+  createTemplateAssignment: (body: AlertTemplateAssignmentIn) =>
+    send<AlertTemplateAssignment>("post", "/alert-template-assignments", body),
+  updateTemplateAssignment: (id: string, body: Pick<AlertTemplateAssignmentIn, "enabled" | "overrides" | "notification_channel_ids">) =>
+    send<AlertTemplateAssignment>("patch", `/alert-template-assignments/${id}`, body),
+  deleteTemplateAssignment: (id: string) => send<void>("delete", `/alert-template-assignments/${id}`),
+  alertPlan: (resourceId: string) => get<AlertPlan>(`/resources/${resourceId}/alert-plan`),
   /** Run health and alert-rule evaluation now (at most once a minute). */
   evaluateAlertRules: () => send<{ status: string; message: string }>("post", "/alert-rules/evaluate"),
   channels: () => get<NotificationChannel[]>("/notification-channels"),

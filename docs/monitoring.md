@@ -65,9 +65,44 @@ Container Registry and Azure SQL Server have no metric health rules. Their healt
 
 Gauges and metric cards receive the plugin's **default** thresholds in their widget configuration, so the UI can colour values. Organisation overrides affect health evaluation but are not written into widget configuration.
 
-## Alerts
+## Alert templates
 
-Alert rules (`/api/v1/alert-rules`, permission `alerts:manage`) target one monitor type and one plugin metric. They can be narrowed to a project, an environment or a single resource, and they define:
+Alerting is template based: choose what to cover, and every resource in it gets the recommended rules for its type.
+
+**Templates.** Every resource type with health rules has an alert template (`GET /api/v1/alert-templates`): its health rules, each with three tiers and a direction (`gt`, `gte`, `lt`, `lte`):
+
+| Tier | Meaning | Notifications |
+| --- | --- | --- |
+| Info | Worth watching, no action needed | None (visible on the Alerts tab) |
+| Warning | May need attention | Teams channels and email lists that include warnings, and the assignment's channels |
+| Critical | Needs action now | Every subscription and the assignment's channels |
+
+For "above" rules Info < Warning < Critical (for example plan CPU 70 / 80 / 90 %); for "below" rules the reverse (for example availability 99.95 / 99.9 / 99 %). Each rule also has a window (how much data is reduced: average, total, maximum or minimum) and a frequency (how often it is evaluated, 5 minutes by default). Binary signals (DDoS attack, unhealthy hosts, VM availability) have no informational tier. Inventory items have no template.
+
+**Customising.** `PUT /api/v1/alert-templates/{monitor_key}/rules/{metric}` sets the organisation's tiers, window and on/off for a rule; `DELETE` returns it to the recommendation. The values are stored in `health_thresholds`, so **health status follows the same warning and critical thresholds**. Tiers out of order for the rule's direction are refused. (`PUT /api/v1/health-rules` still works and writes the same row.)
+
+**Assignments.** Templates apply where an assignment says (`/api/v1/alert-template-assignments`): one resource, an environment, a project, or the whole organisation. A resource is covered by its **most specific** enabled assignment (resource > environment > project > organisation), so a project-wide assignment can be refined for one critical app. An assignment can:
+
+- override individual rules for what it covers (`overrides`, keyed `<monitor_key>:<metric>`: enabled, info, warning, critical)
+- name extra notification channels (Teams, webhook, Slack) that receive its warning and critical alerts
+- be disabled or deleted, which closes its open template alerts immediately
+
+`GET /api/v1/resources/{id}/alert-plan` shows, for one resource, the template, the covering assignment, and each rule's effective thresholds with its current value and tier.
+
+**Evaluation.** With health, every `HEALTH_INTERVAL_MINUTES` (and on **Evaluate now**, which ignores rule frequencies), each covered resource's enabled rules are read in batches and judged against the tiers. There is one alert per resource and metric (`template:<resource_id>:<metric>`, source `template`):
+
+| Situation | Action |
+| --- | --- |
+| A tier is crossed and no alert is open | Open an alert at that severity; notify for warning and critical |
+| A higher tier is crossed | Raise the alert's severity and threshold, add an `escalated` event, notify |
+| Back to a lower tier (still at least info) | Lower the severity, add a `de-escalated` event, no notification |
+| Below the informational threshold | Resolve; notify the recovery only if the alert had been warning or critical |
+| The metric cannot be read | Leave the alert unchanged |
+| The resource or rule is no longer covered | Resolve |
+
+## Custom alert rules (advanced)
+
+For conditions the templates do not cover, alert rules (`/api/v1/alert-rules`, permission `alerts:manage`) target one monitor type and one plugin metric. They can be narrowed to a project, an environment or a single resource, and they define:
 
 - an aggregation: Average, Total, Maximum, Minimum or Count
 - an operator (`gt`, `gte`, `lt`, `lte`) and a threshold
@@ -75,7 +110,7 @@ Alert rules (`/api/v1/alert-rules`, permission `alerts:manage`) target one monit
 - a window of 5 to 1,440 minutes
 - notification channels
 
-Rules are evaluated with health, every `HEALTH_INTERVAL_MINUTES`:
+Custom rules are evaluated with health, every `HEALTH_INTERVAL_MINUTES`:
 
 | Situation | Action |
 | --- | --- |

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -162,6 +163,9 @@ async def evaluate_resources(
                 continue
             warning = override.warning_threshold if override else rule.warning
             critical = override.critical_threshold if override else rule.critical
+            if override is not None and override.window_minutes:
+                # The organisation's template customisation also sets the window health is judged on.
+                rule = replace(rule, window_minutes=override.window_minutes)
             plan.append((rule, warning, critical))
         plans[resource.id] = plan
     values = await _rule_values(db, azure, resources, connections, plans)
@@ -294,8 +298,11 @@ async def _rule_values(
     return out
 
 
-async def run_health_job(organization_id: str | None = None) -> None:
-    """Scheduled job: evaluate health for every organisation (or one)."""
+async def run_health_job(organization_id: str | None = None, force: bool = False) -> None:
+    """Scheduled job: evaluate health for every organisation (or one).
+
+    ``force`` evaluates every alert template rule now, ignoring their frequency (Evaluate now).
+    """
     from app.models import Organization
     from app.services.alerts.evaluator import evaluate_alert_rules
 
@@ -318,7 +325,7 @@ async def run_health_job(organization_id: str | None = None) -> None:
                 async with session_scope() as db:
                     await notify_health_transitions(db, org_id, transitions)
                 async with session_scope() as db:
-                    await evaluate_alert_rules(db, azure, org_id)
+                    await evaluate_alert_rules(db, azure, org_id, force=force)
             except Exception:
                 failed += 1
                 logger.exception("health_job_org_failed", extra={"organization_id": str(org_id)})

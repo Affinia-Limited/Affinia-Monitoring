@@ -54,6 +54,7 @@ from app.services.alerts.teams_alerts import (
     is_teams_subscription,
     teams_config,
 )
+from app.services.alerts.templates import tier_order_error
 from app.services.audit import record_audit
 from app.services.email import email_status, mask_all
 from app.services.jobs import enqueue_health
@@ -281,7 +282,7 @@ async def evaluate_now(request: Request, db: DbSession, user: Manager) -> dict[s
         request=request,
     )
     await db.commit()
-    enqueue_health(str(user.organization_id))
+    enqueue_health(str(user.organization_id), force=True)
     return {"status": "started", "message": "Evaluation started. New alerts appear on the Alerts tab within a minute."}
 
 
@@ -968,8 +969,14 @@ async def set_health_threshold(
         )
     )
     if row is None:
+        # A new row is authoritative for every tier: keep the recommended informational tier while
+        # it still sits below the new thresholds (alert templates read it; health status does not).
+        keep_info = tier_order_error(rule.operator, rule.info, body.warning_threshold, body.critical_threshold) is None
         row = HealthThreshold(
-            organization_id=user.organization_id, monitor_key=body.monitor_key, metric_name=body.metric_name
+            organization_id=user.organization_id,
+            monitor_key=body.monitor_key,
+            metric_name=body.metric_name,
+            info_threshold=rule.info if keep_info else None,
         )
         db.add(row)
     row.warning_threshold, row.critical_threshold, row.enabled = (

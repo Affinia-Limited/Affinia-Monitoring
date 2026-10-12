@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import { AlertDetailDrawer } from "@/pages/Alerts/AlertDetailDrawer";
+import { EnvironmentAlertCoverage } from "@/pages/Alerts/CoveragePanels";
 import type { EnvironmentSummary, Project } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { paths } from "@/utils/paths";
@@ -300,14 +301,17 @@ export function EnvironmentPage() {
                 <IssuesCard projectId={project.id} environment={environment} />
                 <RecentAlerts projectId={project.id} environmentId={environment.id} onOpenAll={() => setTab("alerts")} />
               </div>
-              <Card>
-                <CardContent className="pt-5">
-                  <HealthSummary counts={counts} title={`${environment.name} health`} />
-                  <Button variant="outline" size="sm" className="mt-5 w-full" onClick={() => setTab("resources")}>
-                    View all resources
-                  </Button>
-                </CardContent>
-              </Card>
+              <div className="space-y-6">
+                <Card>
+                  <CardContent className="pt-5">
+                    <HealthSummary counts={counts} title={`${environment.name} health`} />
+                    <Button variant="outline" size="sm" className="mt-5 w-full" onClick={() => setTab("resources")}>
+                      View all resources
+                    </Button>
+                  </CardContent>
+                </Card>
+                <EnvironmentAlertCoverage projectId={project.id} environmentId={environment.id} environmentName={environment.name} />
+              </div>
             </div>
           </div>
         </TabsContent>

@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Monitor, Moon, Sun } from "lucide-react";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -7,13 +7,12 @@ import { KeyValue, PageHeader } from "@/components/common";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Input, Select, Switch } from "@/components/ui/form";
+import { Input, Select } from "@/components/ui/form";
 import { ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import { type ThemePreference, useTheme } from "@/stores/theme";
-import type { HealthRule } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { formatDateTime, titleCase } from "@/utils/format";
 
@@ -54,96 +53,24 @@ function UsersTab() {
   );
 }
 
-function ThresholdRow({ rule, editable }: { rule: HealthRule; editable: boolean }) {
-  const qc = useQueryClient();
-  const [warning, setWarning] = useState(rule.warning_threshold === null ? "" : String(rule.warning_threshold));
-  const [critical, setCritical] = useState(rule.critical_threshold === null ? "" : String(rule.critical_threshold));
-  const [enabled, setEnabled] = useState(rule.enabled);
-  const save = useMutation({
-    mutationFn: () =>
-      endpoints.setHealthRule({
-        monitor_key: rule.monitor_key,
-        metric_name: rule.metric_name,
-        warning_threshold: warning === "" ? null : Number(warning),
-        critical_threshold: critical === "" ? null : Number(critical),
-        enabled,
-      }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["health-rules"] }),
-  });
-  const dirty =
-    warning !== (rule.warning_threshold === null ? "" : String(rule.warning_threshold)) ||
-    critical !== (rule.critical_threshold === null ? "" : String(rule.critical_threshold)) ||
-    enabled !== rule.enabled;
-  const op = rule.operator === "lt" || rule.operator === "lte" ? "below" : "above";
-  return (
-    <TR>
-      <TD>
-        <div className="font-medium">{rule.metric_label}</div>
-        <div className="text-xs text-muted-foreground">
-          {op} threshold, {rule.window_minutes} min window{rule.overridden ? ", customised" : ""}
-        </div>
-      </TD>
-      <TD>
-        <Input aria-label={`${rule.monitor_name} ${rule.metric_label} warning`} className="h-8 w-24" type="number" step="any" value={warning} disabled={!editable} onChange={(e) => setWarning(e.target.value)} />
-      </TD>
-      <TD>
-        <Input aria-label={`${rule.monitor_name} ${rule.metric_label} critical`} className="h-8 w-24" type="number" step="any" value={critical} disabled={!editable} onChange={(e) => setCritical(e.target.value)} />
-      </TD>
-      <TD className="text-xs text-muted-foreground">
-        {rule.default_warning ?? "-"} / {rule.default_critical ?? "-"} {rule.unit}
-      </TD>
-      <TD>
-        <Switch aria-label={`${rule.metric_label} enabled`} checked={enabled} disabled={!editable} onCheckedChange={setEnabled} />
-      </TD>
-      <TD className="text-right">
-        {editable ? (
-          <Button size="sm" variant="outline" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-            Save
-          </Button>
-        ) : null}
-        {save.isError ? <ErrorState error={save.error} compact className="mt-1" /> : null}
-      </TD>
-    </TR>
-  );
-}
-
+/** Health and alert thresholds now live in the alert templates (same data, one place to edit). */
 function ThresholdsTab() {
-  const editable = usePermission(PERMISSIONS.manageSettings);
-  const rules = useQuery({ queryKey: ["health-rules"], queryFn: endpoints.healthRules });
-  if (rules.isLoading) return <LoadingBlock />;
-  if (rules.isError) return <ErrorState error={rules.error} />;
-  const byMonitor = new Map<string, HealthRule[]>();
-  for (const r of rules.data ?? []) byMonitor.set(r.monitor_name, [...(byMonitor.get(r.monitor_name) ?? []), r]);
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Health status is calculated from these thresholds together with Azure Resource Health. Changes apply at the next evaluation.
-      </p>
-      {[...byMonitor.entries()].map(([name, items]) => (
-        <Card key={name}>
-          <CardHeader title={name} />
-          <CardContent className="px-0">
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Metric</TH>
-                  <TH>Warning</TH>
-                  <TH>Critical</TH>
-                  <TH>Default</TH>
-                  <TH>Enabled</TH>
-                  <TH />
-                </TR>
-              </THead>
-              <tbody>
-                {items.map((r) => (
-                  <ThresholdRow key={`${r.monitor_key}-${r.metric_name}-${r.warning_threshold}-${r.critical_threshold}-${r.enabled}`} rule={r} editable={editable} />
-                ))}
-              </tbody>
-            </Table>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+    <Card>
+      <CardHeader
+        title="Alert thresholds"
+        description="Thresholds are part of the recommended alert templates: one template per resource type, with Info, Warning and Critical levels."
+        actions={
+          <Button asChild size="sm">
+            <Link to="/alerts?tab=templates">Open alert templates</Link>
+          </Button>
+        }
+      />
+      <CardContent className="space-y-2 text-sm text-muted-foreground">
+        <p>Health status and recommended alerts use the same thresholds. Change them once in Alerts &gt; Alert templates and both follow.</p>
+        <p>To use different values for one project, environment or resource, customise its coverage there instead of changing the template.</p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -299,7 +226,7 @@ export function SettingsPage() {
       >
         <TabsList aria-label="Settings sections">
           <TabsTrigger value="users">Users and roles</TabsTrigger>
-          <TabsTrigger value="thresholds">Health thresholds</TabsTrigger>
+          <TabsTrigger value="thresholds">Alert thresholds</TabsTrigger>
           {canAudit ? <TabsTrigger value="audit">Audit log</TabsTrigger> : null}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="about">About</TabsTrigger>

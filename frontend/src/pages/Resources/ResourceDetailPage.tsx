@@ -18,6 +18,7 @@ import { HealthReasons } from "@/components/widgets/ResourceWidgets";
 import { AlertTableWidget } from "@/components/widgets/ResourceWidgets";
 import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
+import { RecommendedAlertsPanel } from "@/pages/Alerts/CoveragePanels";
 import type { LiveResourceState, ResourceDetail } from "@/types/api";
 import { cn } from "@/utils/cn";
 import { formatDateTime, formatRelative, regionName, titleCase } from "@/utils/format";
@@ -265,10 +266,13 @@ export function ResourceDetailPage() {
       key: "alerts",
       label: "Alerts",
       content: (
-        <AlertTableWidget
-          resource={r}
-          widget={{ id: "alerts", position: 0, section: "Alerts", widget_type: "alert_table", title: "Open alerts", width: 12, config: {} }}
-        />
+        <div className="space-y-4">
+          <RecommendedAlertsPanel resource={r} />
+          <AlertTableWidget
+            resource={r}
+            widget={{ id: "alerts", position: 0, section: "Alerts", widget_type: "alert_table", title: "Open alerts", width: 12, config: {} }}
+          />
+        </div>
       ),
     },
     {

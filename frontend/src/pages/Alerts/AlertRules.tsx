@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { endpoints } from "@/api/endpoints";
 import { ConfirmButton } from "@/components/common";
@@ -11,9 +11,9 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Select, Switch, Textarea } from "@/components/ui/form";
 import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
-import { useToast } from "@/components/ui/toast";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import type { AlertRule, AlertRuleIn, Operator, Severity } from "@/types/api";
+import { EvaluateNowButton } from "./EvaluateNowButton";
 
 const OPERATORS: { value: Operator; label: string }[] = [
   { value: "gt", label: "Greater than" },
@@ -225,17 +225,6 @@ export function AlertRules() {
   const monitors = useQuery({ queryKey: ["monitors"], queryFn: endpoints.monitors });
   const [editing, setEditing] = useState<AlertRule | null>(null);
   const [open, setOpen] = useState(false);
-  const { notify } = useToast();
-  const evaluate = useMutation({
-    mutationFn: endpoints.evaluateAlertRules,
-    onSuccess: (result) => {
-      notify({ tone: "success", title: "Evaluation started", description: result.message });
-      // Alerts from this run land within a minute; refresh the views shortly after.
-      window.setTimeout(() => void qc.invalidateQueries({ queryKey: ["alerts"] }), 20_000);
-    },
-    onError: (error) =>
-      notify({ tone: "warning", title: "Evaluation not started", description: error instanceof Error ? error.message : "Try again shortly." }),
-  });
   const labelFor = (monitorKey: string, metric: string) => {
     const m = monitors.data?.find((x) => x.key === monitorKey);
     return { monitor: m?.display_name ?? monitorKey, metric: m?.metrics.find((x) => x.key === metric)?.label ?? metric };
@@ -243,20 +232,12 @@ export function AlertRules() {
   return (
     <Card>
       <CardHeader
-        title="Alert rules"
-        description="Metric conditions evaluated by the platform"
+        title="Custom rules"
+        description="Your own metric conditions, on top of the recommended alert templates"
         actions={
           canManage ? (
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={evaluate.isPending}
-                onClick={() => evaluate.mutate()}
-                title="Check every rule against the latest metrics now, instead of waiting for the next scheduled check"
-              >
-                <Play /> Evaluate now
-              </Button>
+              <EvaluateNowButton />
               <Button
                 size="sm"
                 onClick={() => {

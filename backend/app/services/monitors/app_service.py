@@ -147,11 +147,11 @@ class AppServiceMonitor(AzureResourceMonitor):
 
     metrics = _SITE_METRICS
     health_rules = (
-        HealthRule("plan_cpu", "gt", 80, 90, description="App Service Plan CPU"),
-        HealthRule("plan_memory", "gt", 85, 95, description="App Service Plan memory"),
-        HealthRule("http5xx", "gt", 10, 50, reducer="sum", description="HTTP 5xx responses in 15 minutes"),
-        HealthRule("response_time", "gt", 1000, 3000, description="Average response time (ms)"),
-        HealthRule("health_check", "lt", 95, 80, description="Health check pass rate (%)"),
+        HealthRule("plan_cpu", "gt", 80, 90, description="App Service Plan CPU", info=70),
+        HealthRule("plan_memory", "gt", 85, 95, description="App Service Plan memory", info=75),
+        HealthRule("http5xx", "gt", 10, 50, reducer="sum", description="HTTP 5xx responses in 15 minutes", info=1),
+        HealthRule("response_time", "gt", 1000, 3000, description="Average response time (ms)", info=500),
+        HealthRule("health_check", "lt", 95, 80, description="Health check pass rate (%)", info=99),
     )
     log_queries = _HTTP_LOGS + _APP_INSIGHTS_LOGS
     comparison: ClassVar[tuple[ComparisonMetric, ...]] = (
@@ -289,8 +289,8 @@ class AppServicePlanMonitor(AzureResourceMonitor):
         MetricDef("bytes_sent", "BytesSent", "Data out", "bytes", "Total"),
     )
     health_rules = (
-        HealthRule("cpu", "gt", 80, 90, description="CPU"),
-        HealthRule("memory", "gt", 85, 95, description="Memory"),
+        HealthRule("cpu", "gt", 80, 90, description="CPU", info=70),
+        HealthRule("memory", "gt", 85, 95, description="Memory", info=75),
     )
     summary_metrics = ("cpu", "memory", "http_queue")
 

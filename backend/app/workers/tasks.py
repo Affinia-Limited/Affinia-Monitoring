@@ -37,10 +37,10 @@ def sync_connection(self: Any, sync_run_id: str) -> None:
 
 
 @celery_app.task(name="app.workers.tasks.evaluate_health")
-def evaluate_health(organization_id: str | None = None) -> None:
+def evaluate_health(organization_id: str | None = None, force: bool = False) -> None:
     from app.services.health.evaluator import run_health_job
 
-    _run(run_health_job(organization_id))
+    _run(run_health_job(organization_id, force))
 
 
 @celery_app.task(name="app.workers.tasks.schedule_syncs")

@@ -61,6 +61,12 @@ class HealthRule:
     #: How to reduce the window's points to a single value.
     reducer: Rollup = "avg"
     description: str = ""
+    #: Informational tier for alert templates: worth watching, no action needed. Less severe than
+    #: ``warning`` in the operator's direction (gt: info < warning < critical; lt: the reverse).
+    #: ``None`` for binary signals that have no meaningful early level.
+    info: float | None = None
+    #: How often alert templates evaluate this rule.
+    frequency_minutes: int = 5
 
 
 @dataclass(frozen=True)

@@ -3,8 +3,9 @@
 The export turns two sources into native Azure Monitor metric alerts, so Azure itself evaluates
 them and emails an action group even when this platform is down:
 
-* the health rules of each resource's monitor plugin, with the organisation's threshold overrides
-  (one warning and one critical alert per rule, where that threshold exists)
+* the alert template of each resource's type: its rules with the organisation's customised thresholds
+  and, when an assignment covers the resource, that assignment's overrides (one informational,
+  warning and critical alert per rule, where that tier exists; Azure severities 3, 2 and 0)
 * the organisation's enabled custom alert rules, for the resources in their scope
 
 One template is produced per Azure subscription. Deploy it at resource-group scope in any resource
@@ -25,7 +26,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError, ValidationFailedError
-from app.models import AlertRule, Environment, HealthThreshold, Project, Resource, Subscription
+from app.models import (
+    AlertRule,
+    AlertTemplateAssignment,
+    Environment,
+    HealthThreshold,
+    Project,
+    Resource,
+    Subscription,
+)
+from app.services.alerts.templates import active_assignments, covering_assignment, resource_rules
 from app.services.monitors.base import MetricDef, Rollup
 from app.services.monitors.registry import get_monitor
 from app.services.relations import related_resource
@@ -202,19 +212,24 @@ def _candidates(
     rules: list[AlertRule],
     include_health: bool,
     include_rules: bool,
+    assignment: AlertTemplateAssignment | None = None,
 ) -> list[_Candidate]:
-    monitor = get_monitor(resource.monitor_key)
     out: list[_Candidate] = []
     if include_health:
-        for rule in monitor.health_rules:
-            override = overrides.get((monitor.key, rule.metric))
-            if override is not None and not override.enabled:
+        for rule in resource_rules(resource, overrides, assignment):
+            if not rule.enabled:
                 continue
-            warning = override.warning_threshold if override else rule.warning
-            critical = override.critical_threshold if override else rule.critical
-            for level, threshold in (("warning", warning), ("critical", critical)):
+            for level in ("info", "warning", "critical"):
+                threshold = rule.threshold(level)
                 if threshold is None:
                     continue
+                source = (
+                    " (assignment override)"
+                    if rule.overridden
+                    else " (organisation customisation)"
+                    if rule.customized
+                    else ""
+                )
                 out.append(
                     _Candidate(
                         resource=resource,
@@ -224,11 +239,10 @@ def _candidates(
                         severity=_SEVERITY[level],
                         window_minutes=rule.window_minutes,
                         aggregation=None,
-                        reducer=rule.reducer,
+                        reducer=rule.reducer,  # type: ignore[arg-type]
                         suffix=level,
-                        rule_label=f"Health threshold ({level})",
-                        origin=f"{level.capitalize()} health threshold"
-                        + (" (organisation override)" if override else ""),
+                        rule_label=f"Alert template ({level})",
+                        origin=f"{level.capitalize()} alert template threshold{source}",
                     )
                 )
     if include_rules:
@@ -394,6 +408,7 @@ async def build_export(
     include_rules: bool = True,
     recipients: list[str] | None = None,
     group_name: str = DEFAULT_ACTION_GROUP,
+    covered_only: bool = False,
 ) -> dict[str, Any]:
     await _scope(db, organization_id, project_id, environment_id, resource_id)
     query = select(Resource).where(
@@ -409,6 +424,11 @@ async def build_export(
     if resource_id:
         query = query.where(Resource.id == resource_id)
     resources = list(await db.scalars(query.order_by(Resource.name, Resource.azure_id)))
+    assignments = await active_assignments(db, organization_id)
+    covering = {r.id: covering_assignment(r, assignments) for r in resources}
+    if covered_only:
+        # Only resources an alert template assignment covers (what the platform itself alerts on).
+        resources = [r for r in resources if covering[r.id] is not None]
 
     overrides = {
         (t.monitor_key, t.metric_name): t
@@ -442,7 +462,9 @@ async def build_export(
     covered: set[uuid.UUID] = set()
     for resource in resources:
         monitor = get_monitor(resource.monitor_key)
-        for candidate in _candidates(resource, overrides, rules, include_health, include_rules):
+        for candidate in _candidates(
+            resource, overrides, rules, include_health, include_rules, covering.get(resource.id)
+        ):
             definition = monitor.metric(candidate.metric_key)
             if definition is None or not definition.name:
                 skipped.append(

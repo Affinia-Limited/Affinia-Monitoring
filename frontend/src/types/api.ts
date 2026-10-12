@@ -764,3 +764,103 @@ export interface TeamsSetup {
   secret_prefix: string;
   secret_source: "key_vault" | "environment" | "none";
 }
+
+/** One recommended alert of a resource type's template: a metric with up to three severity tiers. */
+export interface TemplateRule {
+  metric: string;
+  label: string;
+  unit: string;
+  description: string;
+  operator: Operator;
+  reducer: "avg" | "sum" | "max" | "min";
+  window_minutes: number;
+  frequency_minutes: number;
+  info: number | null;
+  warning: number | null;
+  critical: number | null;
+  default_info: number | null;
+  default_warning: number | null;
+  default_critical: number | null;
+  default_window_minutes: number;
+  enabled: boolean;
+  /** The organisation changed this rule from the recommended values. */
+  customized: boolean;
+}
+
+/** The ready-made alert template of one supported Azure resource type. */
+export interface AlertTemplate {
+  monitor_key: string;
+  display_name: string;
+  category: string;
+  description: string;
+  customized: boolean;
+  /** Monitored resources of this type, and how many of them a template assignment covers. */
+  resource_count: number;
+  covered_count: number;
+  rules: TemplateRule[];
+}
+
+export interface TemplateRuleIn {
+  enabled: boolean;
+  info: number | null;
+  warning: number | null;
+  critical: number | null;
+  window_minutes?: number;
+}
+
+/** Per-resource (or per-scope) changes to a template rule, keyed "<monitor_key>:<metric>". */
+export interface TemplateRuleOverride {
+  enabled?: boolean;
+  info?: number | null;
+  warning?: number | null;
+  critical?: number | null;
+}
+
+export type AssignmentScope = "resource" | "environment" | "project" | "organization";
+
+/** Where recommended alerts are switched on. The most specific assignment covering a resource wins. */
+export interface AlertTemplateAssignment {
+  id: string;
+  scope: AssignmentScope;
+  resource_id: string | null;
+  project_id: string | null;
+  environment_id: string | null;
+  resource_name: string | null;
+  project_name: string | null;
+  environment_name: string | null;
+  enabled: boolean;
+  overrides: Record<string, TemplateRuleOverride>;
+  notification_channel_ids: string[];
+  covered_resources: number;
+  /** Display names of the templates applied to the covered resources. */
+  templates: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertTemplateAssignmentIn {
+  resource_id?: string | null;
+  project_id?: string | null;
+  environment_id?: string | null;
+  enabled?: boolean;
+  overrides?: Record<string, TemplateRuleOverride>;
+  notification_channel_ids?: string[];
+}
+
+export type AlertTier = "critical" | "warning" | "info" | "ok" | "unknown";
+
+export interface AlertPlanRule extends TemplateRule {
+  current_value: number | null;
+  current_tier: AlertTier;
+  /** This resource's coverage changes the template's value. */
+  overridden: boolean;
+}
+
+/** The recommended alerts that apply to one resource, with their effective thresholds. */
+export interface AlertPlan {
+  resource_id: string;
+  monitor_key: string | null;
+  template: AlertTemplate | null;
+  assignment: AlertTemplateAssignment | null;
+  rules: AlertPlanRule[];
+}

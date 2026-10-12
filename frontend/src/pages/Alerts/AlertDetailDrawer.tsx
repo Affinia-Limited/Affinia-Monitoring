@@ -9,6 +9,8 @@ import { ErrorState, LoadingBlock } from "@/components/ui/states";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import { formatDateTime, formatValue, titleCase } from "@/utils/format";
 
+const SOURCE_LABEL: Record<string, string> = { template: "Recommended alert template", platform: "Custom rule", rule: "Custom rule" };
+
 export function AlertDetailDrawer({ alertId, onClose }: { alertId: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const canAck = usePermission(PERMISSIONS.acknowledgeAlerts);
@@ -64,7 +66,7 @@ export function AlertDetailDrawer({ alertId, onClose }: { alertId: string | null
                   { label: "Started", value: formatDateTime(a.started_at) },
                   { label: "Acknowledged", value: formatDateTime(a.acknowledged_at) },
                   { label: "Resolved", value: formatDateTime(a.resolved_at) },
-                  { label: "Source", value: titleCase(a.source) },
+                  { label: "Source", value: SOURCE_LABEL[a.source] ?? titleCase(a.source) },
                 ]}
               />
               {ack.isError ? <ErrorState error={ack.error} /> : null}
