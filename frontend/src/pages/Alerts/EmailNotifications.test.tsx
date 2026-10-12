@@ -84,12 +84,15 @@ describe("Email notifications", () => {
 
     await user.type(screen.getByLabelText("Name"), "Platform on-call");
     const recipients = screen.getByLabelText("Recipients");
-    await user.type(recipients, "ops@contoso.com, not-an-email");
+    // Pasted rather than typed key by key: the long input kept this test near the 5 s limit under load.
+    await user.click(recipients);
+    await user.paste("ops@contoso.com, not-an-email");
     expect(screen.getByRole("alert")).toHaveTextContent("Not valid email address: not-an-email");
     expect(screen.getByRole("button", { name: "Create list" })).toBeDisabled();
 
     await user.clear(recipients);
-    await user.type(recipients, "Ops@Contoso.com{enter}lead@contoso.com");
+    await user.click(recipients);
+    await user.paste("Ops@Contoso.com\nlead@contoso.com");
     await user.selectOptions(screen.getByLabelText("Email when"), "warning");
     await user.selectOptions(screen.getByLabelText("Project"), "p1");
     await user.click(screen.getByRole("button", { name: "Create list" }));

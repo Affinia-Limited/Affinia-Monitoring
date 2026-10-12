@@ -11,8 +11,8 @@ Permissions are enforced server-side. A missing permission returns `403 PERMISSI
 | `dashboards:view` | Yes | Yes | Yes | Yes |
 | `resources:view` | Yes | Yes | Yes | Yes |
 | `alerts:view` | Yes | Yes | Yes | Yes |
-| `logs:view` | | Yes | Yes | Yes |
-| `logs:run_kql` | | Yes | Yes | Yes |
+| `logs:view` (ready-made queries) | Yes | Yes | Yes | Yes |
+| `logs:run_kql` (custom KQL) | | Yes | Yes | Yes |
 | `alerts:acknowledge` | | Yes | Yes | Yes |
 | `azure:sync` | | Yes | Yes | Yes |
 | `dashboards:manage` | | | Yes | Yes |

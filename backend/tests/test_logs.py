@@ -62,11 +62,13 @@ def test_filters_are_quoted_safely() -> None:
     assert '| where tostring(Level) in~ ("Error")' in query
 
 
-async def test_predefined_query_for_viewer_role_requires_logs_permission(client: httpx.AsyncClient) -> None:
+async def test_viewers_run_ready_made_queries_but_not_custom_kql(client: httpx.AsyncClient) -> None:
     await seeded(client)
     app = await find_resource(client, "app-crm-prod-uks")
     body = {"resource_id": app["id"], "query_key": "http_logs", "time_range": "1h"}
-    assert (await client.post("/api/v1/logs/query", json=body, headers=auth_headers("viewer"))).status_code == 403
+    assert (await client.post("/api/v1/logs/query", json=body, headers=auth_headers("viewer"))).status_code == 200
+    custom = {"resource_id": app["id"], "kql": "AppServiceHTTPLogs | take 1", "time_range": "1h"}
+    assert (await client.post("/api/v1/logs/query", json=custom, headers=auth_headers("viewer"))).status_code == 403
     response = await client.post("/api/v1/logs/query", json=body, headers=auth_headers("operator"))
     assert response.status_code == 200, response.text
     result = response.json()

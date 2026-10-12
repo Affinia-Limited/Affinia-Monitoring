@@ -24,7 +24,7 @@ PROJECT = {"name": "X", "slug": "x"}
         ("super_admin", "GET", "/api/v1/users", None, True),
         ("viewer", "GET", "/api/v1/audit-logs", None, False),
         ("admin", "GET", "/api/v1/audit-logs", None, True),
-        ("viewer", "GET", "/api/v1/logs/targets", None, False),
+        ("viewer", "GET", "/api/v1/logs/targets", None, True),
         ("operator", "GET", "/api/v1/logs/targets", None, True),
         ("viewer", "POST", "/api/v1/azure/sync", None, False),
         ("operator", "POST", "/api/v1/azure/sync", None, True),

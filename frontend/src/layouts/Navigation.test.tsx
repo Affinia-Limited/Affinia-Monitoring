@@ -18,7 +18,8 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "Settings" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Audit log" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    // Viewers read ready-made log queries (custom KQL stays Operator and above).
+    expect(screen.getByRole("link", { name: "Logs" })).toBeInTheDocument();
   });
 
   it("gives Super Admins the full administration section and an alert count", async () => {

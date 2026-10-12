@@ -35,7 +35,7 @@ export function me(overrides: Partial<Me> = {}): Me {
   };
 }
 
-export const viewer = me({ role: "viewer", permissions: ["dashboards:view", "resources:view", "alerts:view"] });
+export const viewer = me({ role: "viewer", permissions: ["dashboards:view", "resources:view", "alerts:view", "logs:view"] });
 
 export function metric(overrides: Partial<MetricOut> = {}): MetricOut {
   return {

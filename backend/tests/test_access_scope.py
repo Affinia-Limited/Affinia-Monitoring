@@ -592,3 +592,37 @@ async def test_security_review_findings_stay_fixed(client: httpx.AsyncClient, wo
     # 8. Tag values (claim configuration) only for members with the whole project.
     projects = (await client.get("/api/v1/projects", headers=world.h("crm_prod_op"))).json()
     assert [p["tag_values"] for p in projects] == [[]]
+
+
+async def test_viewer_reads_ready_made_logs_of_a_single_resource(client: httpx.AsyncClient, world: World) -> None:
+    """A Viewer granted one App Service sees its Application Insights log widgets, but cannot write KQL."""
+    viewer = await _member(
+        client,
+        "app_viewer",
+        "viewer",
+        [{"project_id": world.crm["id"], "environment_id": world.crm_prod["id"], "resource_id": world.crm_app["id"]}],
+    )
+    h = auth_headers("viewer", oid=viewer["oid"])
+    queries = await client.get("/api/v1/logs/queries", params={"resource_id": world.crm_app["id"]}, headers=h)
+    assert queries.status_code == 200, queries.text
+    keys = [q["key"] for q in queries.json()]
+    ai_query = next(k for k in keys if k.startswith("ai_"))  # runs on the linked Application Insights
+    ran = await client.post(
+        "/api/v1/logs/query",
+        json={"resource_id": world.crm_app["id"], "query_key": ai_query, "time_range": "1h"},
+        headers=h,
+    )
+    assert ran.status_code == 200, ran.text
+    kql = await client.post(
+        "/api/v1/logs/query",
+        json={"resource_id": world.crm_app["id"], "kql": "requests | take 1", "time_range": "1h"},
+        headers=h,
+    )
+    assert kql.status_code == 403
+    # Logs of resources outside their access stay hidden.
+    other = await client.post(
+        "/api/v1/logs/query",
+        json={"resource_id": world.prism_app["id"], "query_key": ai_query, "time_range": "1h"},
+        headers=h,
+    )
+    assert other.status_code == 404

@@ -38,10 +38,12 @@ _VIEWER = {
     Permission.view_dashboards,
     Permission.view_resources,
     Permission.view_alerts,
+    # Ready-made log queries (dashboard log widgets, the Logs page) for resources in the user's access.
+    # Writing custom KQL is run_kql (Operator and above).
+    Permission.view_logs,
 }
 
 _OPERATOR = _VIEWER | {
-    Permission.view_logs,
     Permission.run_kql,
     Permission.acknowledge_alerts,
     Permission.sync_azure,
@@ -70,8 +72,11 @@ ROLE_DESCRIPTIONS: dict[Role, str] = {
     Role.super_admin: "Full control, including user and platform settings.",
     Role.admin: "Manage projects, dashboards, alert rules and users within their assigned access; with "
     "access to all projects also Azure connections and notification settings.",
-    Role.operator: "View everything, run log queries, acknowledge alerts and trigger syncs.",
-    Role.viewer: "Read-only access to dashboards, resources and alerts.",
+    Role.operator: (
+        "Everything a Viewer can, plus custom KQL log queries, acknowledging alerts and triggering syncs, "
+        "within their assigned access."
+    ),
+    Role.viewer: "Read-only access to dashboards, resources, alerts and ready-made log queries.",
 }
 
 #: Entra app role values (``roles`` claim) mapped to application roles.
