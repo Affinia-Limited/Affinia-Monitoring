@@ -16,8 +16,8 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import CurrentUser, DbSession, require
-from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
+from app.api.deps import CurrentUser, DbSession, require, require_all_projects
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
 from app.models import (
     Alert,
@@ -34,6 +34,7 @@ from app.schemas.alert_templates import (
     AssignmentIn,
     AssignmentOut,
     AssignmentUpdate,
+    EffectiveCoverageOut,
     PlanRuleOut,
     RuleOverride,
     TemplateRuleIn,
@@ -66,6 +67,8 @@ router = APIRouter(tags=["alert templates"])
 
 Viewer = Annotated[CurrentUser, Depends(require(Permission.view_alerts))]
 Manager = Annotated[CurrentUser, Depends(require(Permission.manage_alerts))]
+#: Template defaults are organisation-wide: changing them needs access to all projects.
+OrgManager = Annotated[CurrentUser, Depends(require_all_projects(Permission.manage_alerts))]
 
 
 # ---- views ------------------------------------------------------------------------------
@@ -76,11 +79,11 @@ def _rule_out(rule: EffectiveRule) -> TemplateRuleOut:
 
 
 async def _coverage(
-    db: DbSession, organization_id: uuid.UUID
+    db: DbSession, user: CurrentUser
 ) -> tuple[list[Resource], list[AlertTemplateAssignment], dict[uuid.UUID, uuid.UUID]]:
-    """Monitored resources, enabled assignments, and resource id -> covering assignment id."""
-    resources = await monitored_resources(db, organization_id)
-    assignments = await active_assignments(db, organization_id)
+    """The caller's monitored resources, enabled assignments, and resource id -> covering assignment id."""
+    resources = [r for r in await monitored_resources(db, user.organization_id) if user.access.can_see_resource(r)]
+    assignments = await active_assignments(db, user.organization_id)
     covering: dict[uuid.UUID, uuid.UUID] = {}
     for resource in resources:
         assignment = covering_assignment(resource, assignments)
@@ -108,9 +111,10 @@ def _template_out(
     )
 
 
-async def _templates(db: DbSession, organization_id: uuid.UUID) -> dict[str, AlertTemplateOut]:
-    customisations = await load_customisations(db, organization_id)
-    resources, _, covering = await _coverage(db, organization_id)
+async def _templates(db: DbSession, user: CurrentUser) -> dict[str, AlertTemplateOut]:
+    """The catalogue; resource and coverage counts are over the caller's resources only."""
+    customisations = await load_customisations(db, user.organization_id)
+    resources, _, covering = await _coverage(db, user)
     totals = Counter(r.monitor_key for r in resources)
     covered = Counter(r.monitor_key for r in resources if r.id in covering)
     return {
@@ -120,11 +124,11 @@ async def _templates(db: DbSession, organization_id: uuid.UUID) -> dict[str, Ale
 
 
 async def _assignment_views(
-    db: DbSession, organization_id: uuid.UUID, assignments: list[AlertTemplateAssignment]
+    db: DbSession, user: CurrentUser, assignments: list[AlertTemplateAssignment]
 ) -> list[AssignmentOut]:
     if not assignments:
         return []
-    resources, _, covering = await _coverage(db, organization_id)
+    resources, _, covering = await _coverage(db, user)
     covered_by: dict[uuid.UUID, list[Resource]] = defaultdict(list)
     for resource in resources:
         if resource.id in covering:
@@ -177,7 +181,7 @@ async def _names(db: DbSession, assignments: list[AlertTemplateAssignment]) -> d
 
 @router.get("/alert-templates", response_model=list[AlertTemplateOut])
 async def list_templates(db: DbSession, user: Viewer) -> list[AlertTemplateOut]:
-    return list((await _templates(db, user.organization_id)).values())
+    return list((await _templates(db, user)).values())
 
 
 def _monitor_or_404(monitor_key: str) -> AzureResourceMonitor:
@@ -190,7 +194,7 @@ def _monitor_or_404(monitor_key: str) -> AzureResourceMonitor:
 @router.get("/alert-templates/{monitor_key}", response_model=AlertTemplateOut)
 async def get_template(monitor_key: str, db: DbSession, user: Viewer) -> AlertTemplateOut:
     _monitor_or_404(monitor_key)
-    return (await _templates(db, user.organization_id))[monitor_key]
+    return (await _templates(db, user))[monitor_key]
 
 
 def _rule_of(
@@ -204,7 +208,7 @@ def _rule_of(
 
 @router.put("/alert-templates/{monitor_key}/rules/{metric}", response_model=TemplateRuleOut)
 async def customise_rule(
-    monitor_key: str, metric: str, body: TemplateRuleIn, request: Request, db: DbSession, user: Manager
+    monitor_key: str, metric: str, body: TemplateRuleIn, request: Request, db: DbSession, user: OrgManager
 ) -> TemplateRuleOut:
     """Set the organisation's thresholds for one template rule (health status follows warning/critical)."""
     monitor = _monitor_or_404(monitor_key)
@@ -243,7 +247,9 @@ async def customise_rule(
 
 
 @router.delete("/alert-templates/{monitor_key}/rules/{metric}", response_model=TemplateRuleOut)
-async def reset_rule(monitor_key: str, metric: str, request: Request, db: DbSession, user: Manager) -> TemplateRuleOut:
+async def reset_rule(
+    monitor_key: str, metric: str, request: Request, db: DbSession, user: OrgManager
+) -> TemplateRuleOut:
     """Back to the recommended thresholds (for alerts and health status)."""
     monitor = _monitor_or_404(monitor_key)
     if known_rule(monitor.key, metric) is None:
@@ -322,7 +328,7 @@ async def _scope_ids(
                 Resource.id == body.resource_id, Resource.organization_id == org, Resource.deleted_at.is_(None)
             )
         )
-        if resource is None:
+        if resource is None or not user.access.can_see_resource(resource):
             raise NotFoundError("Resource not found.")
         if template_monitor(resource.monitor_key) is None:
             raise ValidationFailedError("This resource type has no alert template (inventory items are not monitored).")
@@ -337,8 +343,12 @@ async def _scope_ids(
                 Environment.deleted_at.is_(None),
             )
         )
-        if env is None or env.project_id != body.project_id:
+        if env is None or env.project_id != body.project_id or not user.access.can_see_environment(env.id):
             raise ValidationFailedError("The environment must belong to the chosen project.")
+        if not user.access.has_full_environment(env.id):
+            raise PermissionDeniedError(
+                "You need access to the whole environment to apply alerts to it.", code="ACCESS_OUT_OF_SCOPE"
+            )
         return None, body.project_id, env.id
     if body.project_id:
         found = await db.scalar(
@@ -346,9 +356,15 @@ async def _scope_ids(
                 Project.id == body.project_id, Project.organization_id == org, Project.deleted_at.is_(None)
             )
         )
-        if found is None:
+        if found is None or not user.access.can_see_project(found):
             raise NotFoundError("Project not found.")
+        if not user.access.has_full_project(found):
+            raise PermissionDeniedError(
+                "You need access to the whole project to apply alerts to it.", code="ACCESS_OUT_OF_SCOPE"
+            )
         return None, body.project_id, None
+    # Organisation-wide coverage.
+    user.access.require_unrestricted()
     return None, None, None
 
 
@@ -360,9 +376,28 @@ async def _assignment(db: DbSession, user: CurrentUser, assignment_id: uuid.UUID
             AlertTemplateAssignment.deleted_at.is_(None),
         )
     )
-    if assignment is None:
+    if assignment is None or not await _assignment_in_scope(db, user, assignment):
         raise NotFoundError("Alert template assignment not found.")
     return assignment
+
+
+async def _assignment_in_scope(db: DbSession, user: CurrentUser, assignment: AlertTemplateAssignment) -> bool:
+    """Coverage is the caller's when its whole scope is: its resource, environment or project, or
+    (organisation-wide coverage) access to all projects."""
+    if user.access.unrestricted:
+        return True
+    if assignment.resource_id is not None:
+        resource = await db.get(Resource, assignment.resource_id)
+        return resource is not None and user.access.can_see_resource(resource)
+    return user.access.covers_scope(project_id=assignment.project_id, environment_id=assignment.environment_id)
+
+
+def _check_channels_allowed(user: CurrentUser, requested: list[uuid.UUID], existing: list[Any] | None = None) -> None:
+    """Notification channels are organisation settings: scoped managers keep existing ones only."""
+    if user.access.unrestricted:
+        return
+    if {str(c) for c in requested} - {str(c) for c in existing or []}:
+        user.access.require_unrestricted()
 
 
 def _audit_details(a: AlertTemplateAssignment) -> dict[str, Any]:
@@ -395,13 +430,65 @@ async def list_assignments(
         query = query.where(AlertTemplateAssignment.project_id == project_id)
     if environment_id:
         query = query.where(AlertTemplateAssignment.environment_id == environment_id)
-    assignments = list(await db.scalars(query.order_by(AlertTemplateAssignment.created_at)))
-    return await _assignment_views(db, user.organization_id, assignments)
+    assignments = [
+        a
+        for a in await db.scalars(query.order_by(AlertTemplateAssignment.created_at))
+        if await _assignment_in_scope(db, user, a)
+    ]
+    return await _assignment_views(db, user, assignments)
+
+
+@router.get("/alert-template-assignments/effective", response_model=EffectiveCoverageOut)
+async def effective_coverage(
+    db: DbSession, user: Viewer, environment_id: Annotated[uuid.UUID, Query()]
+) -> EffectiveCoverageOut:
+    """The coverage that decides for an environment: its own, else its project's, else organisation-wide.
+
+    Members see which broader coverage applies to their environment (its label only); the coverage
+    itself is returned only when it lies within their access.
+    """
+    env = await db.scalar(
+        select(Environment).where(
+            Environment.id == environment_id,
+            Environment.organization_id == user.organization_id,
+            Environment.deleted_at.is_(None),
+        )
+    )
+    if env is None or not user.access.can_see_environment(env.id):
+        raise NotFoundError("Environment not found.")
+    candidates = list(
+        await db.scalars(
+            select(AlertTemplateAssignment).where(
+                AlertTemplateAssignment.organization_id == user.organization_id,
+                AlertTemplateAssignment.deleted_at.is_(None),
+                AlertTemplateAssignment.resource_id.is_(None),
+            )
+        )
+    )
+    decisive = (
+        next((a for a in candidates if a.environment_id == env.id), None)
+        or next((a for a in candidates if a.environment_id is None and a.project_id == env.project_id), None)
+        or next((a for a in candidates if a.environment_id is None and a.project_id is None), None)
+    )
+    if decisive is None:
+        return EffectiveCoverageOut(scope=None, covered=False, label=None, assignment=None)
+    project = await db.get(Project, env.project_id)
+    project_name = project.name if project else "Project"
+    if decisive.environment_id:
+        scope, label = "environment", f"{project_name} / {env.name}"
+    elif decisive.project_id:
+        scope, label = "project", f"{project_name} (all environments)"
+    else:
+        scope, label = "organization", "All projects"
+    visible = await _assignment_in_scope(db, user, decisive)
+    view = (await _assignment_views(db, user, [decisive]))[0] if visible else None
+    return EffectiveCoverageOut(scope=scope, covered=decisive.enabled, label=label, assignment=view)
 
 
 @router.post("/alert-template-assignments", response_model=AssignmentOut, status_code=status.HTTP_201_CREATED)
 async def create_assignment(body: AssignmentIn, request: Request, db: DbSession, user: Manager) -> AssignmentOut:
     resource_id, project_id, environment_id = await _scope_ids(db, user, body)
+    _check_channels_allowed(user, body.notification_channel_ids)
     overrides = await _validate_overrides(db, user, body.overrides)
     channel_ids = await _validate_channels(db, user, body.notification_channel_ids)
     _, key = scope_key(resource_id, project_id, environment_id)
@@ -450,7 +537,7 @@ async def create_assignment(body: AssignmentIn, request: Request, db: DbSession,
     )
     await db.commit()
     await db.refresh(assignment)
-    return (await _assignment_views(db, user.organization_id, [assignment]))[0]
+    return (await _assignment_views(db, user, [assignment]))[0]
 
 
 def _exists(existing: uuid.UUID | None) -> ConflictError:
@@ -471,6 +558,7 @@ async def update_assignment(
     if body.overrides is not None:
         assignment.overrides = await _validate_overrides(db, user, body.overrides)
     if body.notification_channel_ids is not None:
+        _check_channels_allowed(user, body.notification_channel_ids, assignment.notification_channel_ids)
         assignment.notification_channel_ids = await _validate_channels(db, user, body.notification_channel_ids)
     await db.flush()
     if not assignment.enabled:
@@ -486,7 +574,7 @@ async def update_assignment(
     )
     await db.commit()
     await db.refresh(assignment)
-    return (await _assignment_views(db, user.organization_id, [assignment]))[0]
+    return (await _assignment_views(db, user, [assignment]))[0]
 
 
 @router.delete(
@@ -522,14 +610,14 @@ async def alert_plan(resource_id: uuid.UUID, db: DbSession, user: Viewer) -> Ale
             Resource.deleted_at.is_(None),
         )
     )
-    if resource is None:
+    if resource is None or not user.access.can_see_resource(resource):
         raise NotFoundError("Resource not found.")
     monitor = template_monitor(resource.monitor_key)
     if monitor is None:
         return AlertPlanOut(
             resource_id=resource.id, monitor_key=resource.monitor_key, template=None, assignment=None, rules=[]
         )
-    templates = await _templates(db, user.organization_id)
+    templates = await _templates(db, user)
     assignments = await active_assignments(db, user.organization_id)
     assignment = covering_assignment(resource, assignments)
     customisations = await load_customisations(db, user.organization_id)
@@ -562,7 +650,9 @@ async def alert_plan(resource_id: uuid.UUID, db: DbSession, user: Viewer) -> Ale
             )
         )
     assignment_view = (
-        (await _assignment_views(db, user.organization_id, [assignment]))[0] if assignment is not None else None
+        (await _assignment_views(db, user, [assignment]))[0]
+        if assignment is not None and await _assignment_in_scope(db, user, assignment)
+        else None
     )
     return AlertPlanOut(
         resource_id=resource.id,

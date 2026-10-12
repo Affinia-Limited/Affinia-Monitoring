@@ -9,7 +9,7 @@ import type { AlertPlan, AlertTemplate, AlertTemplateAssignment, TemplateRule } 
 import { SettingsPage } from "@/pages/Settings/SettingsPage";
 import { AlertsPage } from "./AlertsPage";
 import { AlertTemplates } from "./AlertTemplates";
-import { coverageFor, EnvironmentAlertCoverage, RecommendedAlertsPanel } from "./CoveragePanels";
+import { EnvironmentAlertCoverage, RecommendedAlertsPanel } from "./CoveragePanels";
 import { tierOrderError } from "./templateShared";
 
 function rule(overrides: Partial<TemplateRule> = {}): TemplateRule {
@@ -320,14 +320,27 @@ describe("Recommended alerts on a resource", () => {
 });
 
 describe("Alert coverage of an environment", () => {
-  it("picks the most specific coverage", () => {
-    const org = assignment({ id: "o", scope: "organization", project_id: null, environment_id: null });
-    const prj = assignment({ id: "p", scope: "project", environment_id: null });
-    const env = assignment({ id: "e" });
-    expect(coverageFor([org, prj, env], "p1", "e1")?.id).toBe("e");
-    expect(coverageFor([org, prj], "p1", "e1")?.id).toBe("p");
-    expect(coverageFor([org], "p1", "e1")?.id).toBe("o");
-    expect(coverageFor([], "p1", "e1")).toBeNull();
+  it("shows broader coverage decided by the server, even when it is outside the user's own access", async () => {
+    serve();
+    server.use(
+      http.get("*/api/v1/alert-template-assignments/effective", () =>
+        HttpResponse.json({ scope: "organization", covered: true, label: "All projects", assignment: null }),
+      ),
+    );
+    renderWithProviders(<EnvironmentAlertCoverage projectId="p1" environmentId={environment().id} environmentName="Production" />);
+    expect(await screen.findByText("All projects")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Apply recommended alerts/ })).not.toBeInTheDocument();
+  });
+
+  it("says when recommended alerts are turned off for the environment", async () => {
+    serve();
+    server.use(
+      http.get("*/api/v1/alert-template-assignments/effective", () =>
+        HttpResponse.json({ scope: "environment", covered: false, label: "CRM / Production", assignment: null }),
+      ),
+    );
+    renderWithProviders(<EnvironmentAlertCoverage projectId="p1" environmentId={environment().id} environmentName="Production" />);
+    expect(await screen.findByText(/turned off for this environment/)).toBeInTheDocument();
   });
 
   it("applies recommended alerts to an uncovered environment", async () => {

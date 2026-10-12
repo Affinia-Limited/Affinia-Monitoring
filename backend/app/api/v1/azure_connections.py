@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import func, select
 
-from app.api.deps import Azure, CurrentUser, DbSession, require
+from app.api.deps import Azure, CurrentUser, DbSession, require_all_projects
 from app.core.config import Environment as AppEnvironment
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
@@ -29,9 +29,11 @@ from app.services.jobs import enqueue_sync
 
 router = APIRouter(prefix="/azure", tags=["azure"])
 
-Viewer = Annotated[CurrentUser, Depends(require(Permission.view_resources))]
-Connector = Annotated[CurrentUser, Depends(require(Permission.connect_azure))]
-Syncer = Annotated[CurrentUser, Depends(require(Permission.sync_azure))]
+# Azure connections, subscriptions and syncs are organisation-level: every endpoint here needs
+# access to all projects as well as the role permission.
+Viewer = Annotated[CurrentUser, Depends(require_all_projects(Permission.view_resources))]
+Connector = Annotated[CurrentUser, Depends(require_all_projects(Permission.connect_azure))]
+Syncer = Annotated[CurrentUser, Depends(require_all_projects(Permission.sync_azure))]
 
 REQUIRED_ROLES = [
     {

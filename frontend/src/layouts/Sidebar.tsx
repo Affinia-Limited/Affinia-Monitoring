@@ -18,6 +18,7 @@ import { NavLink } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
 import { HealthDot } from "@/components/status";
 import { useWithFilters } from "@/hooks/useFilterSearch";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import { useRefreshInterval } from "@/stores/live";
 import { cn } from "@/utils/cn";
@@ -80,7 +81,9 @@ export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavig
   const { data: me } = useMe();
   const canLogs = usePermission(PERMISSIONS.viewLogs);
   const canManageUsers = usePermission(PERMISSIONS.manageUsers);
-  const canAudit = usePermission(PERMISSIONS.viewAudit);
+  // Organisation-wide areas (Azure subscriptions, the audit log) need access to all projects.
+  const { unrestricted } = useAccess();
+  const canAudit = usePermission(PERMISSIONS.viewAudit) && unrestricted;
   const [showAll, setShowAll] = useState(false);
   const withFilters = useWithFilters();
   const allProjects = projects.data ?? [];
@@ -159,7 +162,7 @@ export function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavig
         </button>
 
         <SectionLabel collapsed={collapsed}>Administration</SectionLabel>
-        <Item to="/azure-connections" icon={<Cloud />} label="Azure Connections" collapsed={collapsed} />
+        {unrestricted ? <Item to="/azure-connections" icon={<Cloud />} label="Azure Connections" collapsed={collapsed} /> : null}
         {canManageUsers ? <Item to="/settings/users" icon={<Users />} label="Users" collapsed={collapsed} /> : null}
         {canAudit ? <Item to="/settings?tab=audit" icon={<FileClock />} label="Audit log" collapsed={collapsed} /> : null}
         <Item to="/settings" end icon={<Settings />} label="Settings" collapsed={collapsed} />

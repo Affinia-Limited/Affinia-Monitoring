@@ -8,7 +8,7 @@ informational, a warning and a critical threshold. Values resolve in three layer
 3. the overrides of the assignment that covers a resource
 
 Assignments apply templates to a resource, an environment, a project or the whole organisation.
-A resource is covered by its most specific enabled assignment: resource > environment > project >
+A resource is covered by its most specific assignment (if that one is enabled): resource > environment > project >
 organisation. Resources without a monitor (inventory items) have no template.
 """
 
@@ -264,8 +264,10 @@ def scope_of(assignment: AlertTemplateAssignment) -> str:
 
 
 async def active_assignments(
-    db: AsyncSession, organization_id: uuid.UUID, *, enabled_only: bool = True
+    db: AsyncSession, organization_id: uuid.UUID, *, enabled_only: bool = False
 ) -> list[AlertTemplateAssignment]:
+    """Non-deleted assignments. Disabled ones are included by default: a disabled assignment is an
+    explicit "off" that overrides broader coverage (see ``covering_assignment``)."""
     query = select(AlertTemplateAssignment).where(
         AlertTemplateAssignment.organization_id == organization_id, AlertTemplateAssignment.deleted_at.is_(None)
     )
@@ -277,10 +279,15 @@ async def active_assignments(
 def covering_assignment(
     resource: Resource, assignments: Sequence[AlertTemplateAssignment]
 ) -> AlertTemplateAssignment | None:
-    """The most specific enabled assignment covering the resource."""
+    """The assignment that covers the resource, or ``None`` when it is not covered.
+
+    The most specific assignment decides (resource > environment > project > organization). If that
+    assignment is turned off, the resource is not covered, even when a broader assignment is on:
+    "turn off for this resource / environment" must win over coverage applied higher up.
+    """
     by_scope: dict[str, AlertTemplateAssignment] = {}
     for a in assignments:
-        if not a.enabled or a.deleted_at is not None:
+        if a.deleted_at is not None:
             continue
         if a.resource_id:
             if a.resource_id == resource.id:
@@ -295,7 +302,8 @@ def covering_assignment(
             by_scope["organization"] = a
     for scope in ("resource", "environment", "project", "organization"):
         if scope in by_scope:
-            return by_scope[scope]
+            decisive = by_scope[scope]
+            return decisive if decisive.enabled else None
     return None
 
 

@@ -70,7 +70,7 @@ def _queries_for(resource: Resource) -> tuple[LogQueryDef, ...]:
 
 async def _target(db: DbSession, user: CurrentUser, resource_id: uuid.UUID) -> Resource:
     resource = await resource_in_org(db, user.organization_id, resource_id)
-    if resource is None:
+    if resource is None or not user.access.can_see_resource(resource):
         raise NotFoundError("Resource not found.")
     return resource
 
@@ -81,7 +81,11 @@ async def log_targets(db: DbSession, user: LogViewer) -> list[LogTarget]:
         r
         for r in await db.scalars(
             select(Resource)
-            .where(Resource.organization_id == user.organization_id, Resource.deleted_at.is_(None))
+            .where(
+                Resource.organization_id == user.organization_id,
+                Resource.deleted_at.is_(None),
+                user.access.resource_filter(),
+            )
             .order_by(Resource.name)
         )
         if _queries_for(r)
@@ -188,7 +192,8 @@ async def run_query(
     )
     return LogQueryOut(
         resource_id=resource.id,
-        executed_against=execute_on.id,
+        # Predefined queries may run on a related resource (e.g. Application Insights); name it only if visible.
+        executed_against=execute_on.id if user.access.can_see_resource(execute_on) else resource.id,
         query=query,
         columns=[{"name": c.name, "type": c.type} for c in result.columns],
         rows=result.rows,

@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import type { AlertTemplate, AlertTemplateAssignment, AlertTemplateAssignmentIn, Resource, TemplateRule, TemplateRuleOverride } from "@/types/api";
 import { cn } from "@/utils/cn";
@@ -173,6 +174,7 @@ export function ApplyTemplatesDialog({
   onEditExisting?: (assignmentId: string) => void;
 }) {
   const qc = useQueryClient();
+  const { unrestricted } = useAccess();
   const { notify } = useToast();
   const [scope, setScope] = useState<ScopeChoice>(initial?.scope ?? "resource");
   const [resource, setResource] = useState<Resource | null>(initial?.resource ?? null);
@@ -247,7 +249,7 @@ export function ApplyTemplatesDialog({
       >
         <div className="space-y-4">
           <div role="radiogroup" aria-label="Coverage" className="inline-flex flex-wrap rounded-md bg-muted p-0.5 text-sm">
-            {SCOPE_CHOICES.map((c) => (
+            {SCOPE_CHOICES.filter((c) => c.value !== "organization" || unrestricted).map((c) => (
               <button
                 key={c.value}
                 type="button"
@@ -644,7 +646,9 @@ function RuleEditDialog({ template, rule, open, onOpenChange }: { template: Aler
 function TemplateSection({ template, defaultOpen }: { template: AlertTemplate; defaultOpen: boolean }) {
   const qc = useQueryClient();
   const { notify } = useToast();
-  const canManage = usePermission(PERMISSIONS.manageAlerts);
+  // Template defaults apply to the whole organisation, so only users with access to all projects edit them.
+  const { unrestricted } = useAccess();
+  const canManage = usePermission(PERMISSIONS.manageAlerts) && unrestricted;
   const [open, setOpen] = useState(defaultOpen);
   const [editing, setEditing] = useState<TemplateRule | null>(null);
   const reset = useMutation({

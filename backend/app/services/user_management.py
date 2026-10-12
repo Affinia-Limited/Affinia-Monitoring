@@ -5,6 +5,8 @@ All rules are enforced here (not in the UI):
 * nobody can change their own role or status;
 * nobody can assign a role above their own, or manage someone ranked above them,
   so only a Super Admin can create, change or remove a Super Admin;
+* a manager sees and manages only members whose access (projects, environments, resources)
+  lies inside their own, and can only grant access they have themselves;
 * the organisation always keeps at least one active Super Admin;
 * access is removed by suspension or deactivation, never by deleting the row.
 """
@@ -22,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Role, role_rank
 from app.models import Organization, User, UserStatus
+from app.schemas.misc import AccessGrantIn
+from app.services.access_grants import GrantKey, can_manage_access, replace_grants, validate_grants
 from app.services.audit import record_audit
 from app.services.authentication.users import count_active_super_admins, normalise_email
 
@@ -36,9 +40,18 @@ async def get_member(db: AsyncSession, actor: CurrentUser, user_id: uuid.UUID) -
     target = await db.scalar(
         select(User).where(User.id == user_id, User.organization_id == actor.organization_id, User.deleted_at.is_(None))
     )
-    if target is None:
+    if target is None or not await can_see_member(db, actor, target):
         raise NotFoundError("User not found.")
     return target
+
+
+async def can_see_member(db: AsyncSession, actor: CurrentUser, target: User) -> bool:
+    """Members ranked above the manager, or with access outside the manager's, are not visible."""
+    if target.id == actor.id:
+        return True
+    if role_rank(Role(target.role_key)) > role_rank(actor.role):
+        return False
+    return await can_manage_access(db, actor.access, target)
 
 
 def _check_can_manage(actor: CurrentUser, target: User) -> None:
@@ -68,8 +81,20 @@ async def invite(
     role: Role,
     display_name: str | None,
     request: Request,
+    grants: list[AccessGrantIn] | None = None,
 ) -> User:
     _check_can_assign(actor, role)
+    keys: list[GrantKey]
+    described: list[dict[str, str | None]]
+    if role is Role.super_admin:
+        keys, described = [], [{"scope": "unrestricted (Super Admin)"}]
+    else:
+        if not grants:
+            raise ValidationFailedError(
+                "Choose what the user can access: all projects, or specific projects, environments or resources.",
+                code="ACCESS_REQUIRED",
+            )
+        keys, described = await validate_grants(db, actor, grants)
     normalised = normalise_email(email)
     if normalised is None:
         raise ValidationFailedError("Enter the user's Microsoft Entra email address or UPN.")
@@ -86,6 +111,9 @@ async def invite(
     )
     now = datetime.now(UTC)
     if existing is not None:
+        # Someone outside the inviter's access: one generic answer, nothing about their status or rank.
+        if not await can_see_member(db, actor, existing):
+            raise ConflictError("A user with this email address already exists.", code="USER_EXISTS")
         if existing.status != UserStatus.pending.value:
             hint = " Reactivate it instead." if existing.status != UserStatus.active.value else ""
             raise ConflictError(f"A user with this email address already exists.{hint}", code="USER_EXISTS")
@@ -110,6 +138,7 @@ async def invite(
         db.add(target)
         reinvite = False
     await db.flush()
+    await replace_grants(db, actor, target, keys)
     await record_audit(
         db,
         action="user.invited",
@@ -117,7 +146,33 @@ async def invite(
         target_type="user",
         target_id=str(target.id),
         request=request,
-        details={"email": normalised, "role": role.value, "reinvite": reinvite},
+        details={"email": normalised, "role": role.value, "reinvite": reinvite, "access": described},
+    )
+    return target
+
+
+async def set_access(
+    db: AsyncSession, actor: CurrentUser, target: User, grants: list[AccessGrantIn], request: Request
+) -> User:
+    """Replaces a member's access. Super Admins are always unrestricted and have no grants."""
+    if target.id == actor.id:
+        raise ValidationFailedError("You cannot change your own access.", code="SELF_MODIFICATION")
+    _check_can_manage(actor, target)
+    if target.role_key == Role.super_admin.value:
+        raise ValidationFailedError(
+            "Super Admins always have access to everything; change the role to limit their access.",
+            code="SUPER_ADMIN_UNRESTRICTED",
+        )
+    keys, described = await validate_grants(db, actor, grants) if grants else ([], [])
+    await replace_grants(db, actor, target, keys)
+    await record_audit(
+        db,
+        action="user.access_changed",
+        user=actor,
+        target_type="user",
+        target_id=str(target.id),
+        request=request,
+        details={"access": described or [{"scope": "none"}]},
     )
     return target
 

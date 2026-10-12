@@ -68,9 +68,19 @@ async def _get(db: DbSession, user: CurrentUser, dashboard_id: uuid.UUID) -> Das
         )
         .options(selectinload(Dashboard.widgets))
     )
-    if dashboard is None:
+    if dashboard is None or not await _visible(db, user, dashboard):
         raise NotFoundError("Dashboard not found.")
     return dashboard
+
+
+async def _visible(db: DbSession, user: CurrentUser, dashboard: Dashboard) -> bool:
+    """A resource dashboard is visible with its resource; organisation dashboards need all projects."""
+    if user.access.unrestricted:
+        return True
+    if dashboard.resource_id is None:
+        return False
+    resource = await db.get(Resource, dashboard.resource_id)
+    return resource is not None and user.access.can_see_resource(resource)
 
 
 @router.get("", response_model=list[DashboardSummary])
@@ -88,6 +98,8 @@ async def list_dashboards(
         .where(Dashboard.organization_id == user.organization_id, Dashboard.deleted_at.is_(None))
         .order_by(Dashboard.name)
     )
+    if not user.access.unrestricted:
+        query = query.where(Dashboard.resource_id.is_not(None), user.access.resource_filter())
     if project_id:
         query = query.where(Resource.project_id == project_id)
     if environment_id:
@@ -106,6 +118,17 @@ async def list_templates(db: DbSession, user: Viewer) -> list[DashboardTemplate]
 
 @router.get("/by-resource/{resource_id}", response_model=DashboardOut)
 async def dashboard_for_resource(resource_id: uuid.UUID, db: DbSession, user: Viewer) -> DashboardOut:
+    # One answer for "outside your access" and "no dashboard", so the resource's existence is not revealed.
+    missing = "No dashboard has been generated for this resource yet."
+    resource = await db.scalar(
+        select(Resource).where(
+            Resource.id == resource_id,
+            Resource.organization_id == user.organization_id,
+            Resource.deleted_at.is_(None),
+        )
+    )
+    if resource is None or not user.access.can_see_resource(resource):
+        raise NotFoundError(missing)
     dashboard_id = await db.scalar(
         select(Dashboard.id).where(
             Dashboard.resource_id == resource_id,
@@ -114,7 +137,7 @@ async def dashboard_for_resource(resource_id: uuid.UUID, db: DbSession, user: Vi
         )
     )
     if dashboard_id is None:
-        raise NotFoundError("No dashboard has been generated for this resource yet.")
+        raise NotFoundError(missing)
     return await _dashboard_out(db, user, await _get(db, user, dashboard_id))
 
 

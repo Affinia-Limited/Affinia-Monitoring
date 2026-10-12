@@ -7,11 +7,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import func, or_, select
 
-from app.api.deps import CurrentUser, DbSession, require
+from app.api.deps import CurrentUser, DbSession, require, require_all_projects
 from app.core.cache import get_cache
 from app.core.config import Environment as AppEnvironment
 from app.core.config import get_settings
-from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
 from app.models import (
     Alert,
@@ -66,6 +66,9 @@ router = APIRouter(tags=["alerts"])
 Viewer = Annotated[CurrentUser, Depends(require(Permission.view_alerts))]
 Acker = Annotated[CurrentUser, Depends(require(Permission.acknowledge_alerts))]
 Manager = Annotated[CurrentUser, Depends(require(Permission.manage_alerts))]
+#: Organisation-wide notification settings (channels, Teams, email) need access to all projects.
+OrgManager = Annotated[CurrentUser, Depends(require_all_projects(Permission.manage_alerts))]
+OrgViewer = Annotated[CurrentUser, Depends(require_all_projects(Permission.view_alerts))]
 
 
 # ---- alerts ---------------------------------------------------------------------------
@@ -91,7 +94,7 @@ async def list_alerts(
     query = (
         select(Alert)
         .join(Resource, Resource.id == Alert.resource_id)
-        .where(Alert.organization_id == user.organization_id)
+        .where(Alert.organization_id == user.organization_id, user.access.resource_filter())
     )
     if status_filter == "open":
         query = query.where(Alert.status.in_(["active", "acknowledged"]))
@@ -126,7 +129,8 @@ async def list_alerts(
 
 async def _alert(db: DbSession, user: CurrentUser, alert_id: uuid.UUID) -> Alert:
     alert = await db.scalar(select(Alert).where(Alert.id == alert_id, Alert.organization_id == user.organization_id))
-    if alert is None:
+    resource = await db.get(Resource, alert.resource_id) if alert is not None else None
+    if alert is None or resource is None or not user.access.can_see_resource(resource):
         raise NotFoundError("Alert not found.")
     return alert
 
@@ -191,7 +195,25 @@ async def resolve_alert(alert_id: uuid.UUID, request: Request, db: DbSession, us
 # ---- rules ----------------------------------------------------------------------------
 
 
-async def _validate_rule(db: DbSession, user: CurrentUser, body: AlertRuleIn) -> None:
+async def _rule_in_scope(
+    db: DbSession,
+    user: CurrentUser,
+    resource_id: uuid.UUID | None,
+    project_id: uuid.UUID | None,
+    environment_id: uuid.UUID | None,
+) -> bool:
+    """Whether a rule's configured scope lies entirely inside the caller's access."""
+    if user.access.unrestricted:
+        return True
+    if resource_id is not None:
+        resource = await db.get(Resource, resource_id)
+        return resource is not None and user.access.can_see_resource(resource)
+    return user.access.covers_scope(project_id=project_id, environment_id=environment_id)
+
+
+async def _validate_rule(
+    db: DbSession, user: CurrentUser, body: AlertRuleIn, existing: AlertRule | None = None
+) -> None:
     monitor = get_monitor(body.monitor_key)
     if monitor.key != body.monitor_key or monitor.metric(body.metric_name) is None:
         raise ValidationFailedError("Unknown resource type or metric.")
@@ -237,6 +259,33 @@ async def _validate_rule(db: DbSession, user: CurrentUser, body: AlertRuleIn) ->
         )
         if found != len(set(body.notification_channel_ids)):
             raise ValidationFailedError("One or more notification channels were not found.")
+    if not user.access.unrestricted:
+        # Out-of-scope objects look like missing ones; a partly granted scope is refused explicitly.
+        if body.resource_id is not None:
+            resource = await db.get(Resource, body.resource_id)
+            if resource is None or not user.access.can_see_resource(resource):
+                raise ValidationFailedError("Resource not found.")
+        elif body.environment_id is not None:
+            if not user.access.can_see_environment(body.environment_id):
+                raise ValidationFailedError("Environment not found.")
+            if not user.access.has_full_environment(body.environment_id):
+                raise PermissionDeniedError(
+                    "You need access to the whole environment for a rule that covers it.",
+                    code="ACCESS_OUT_OF_SCOPE",
+                )
+        elif body.project_id is not None:
+            if not user.access.can_see_project(body.project_id):
+                raise ValidationFailedError("Project not found.")
+            if not user.access.has_full_project(body.project_id):
+                raise PermissionDeniedError(
+                    "You need access to the whole project for a rule that covers it.", code="ACCESS_OUT_OF_SCOPE"
+                )
+        else:
+            user.access.require_unrestricted()
+        # Notification channels are organisation settings: keep the rule's existing ones only.
+        kept = {str(c) for c in (existing.notification_channel_ids if existing else [])}
+        if {str(c) for c in body.notification_channel_ids} - kept:
+            user.access.require_unrestricted()
 
 
 def _rule_values(body: AlertRuleIn) -> dict[str, object]:
@@ -247,13 +296,16 @@ def _rule_values(body: AlertRuleIn) -> dict[str, object]:
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
 async def list_rules(db: DbSession, user: Viewer) -> list[AlertRule]:
-    return list(
+    rules = list(
         await db.scalars(
             select(AlertRule)
             .where(AlertRule.organization_id == user.organization_id, AlertRule.deleted_at.is_(None))
             .order_by(AlertRule.name)
         )
     )
+    if user.access.unrestricted:
+        return rules
+    return [r for r in rules if await _rule_in_scope(db, user, r.resource_id, r.project_id, r.environment_id)]
 
 
 #: An on-demand evaluation runs the whole organisation's health and alert rules; once a minute is plenty.
@@ -311,7 +363,7 @@ async def _rule(db: DbSession, user: CurrentUser, rule_id: uuid.UUID) -> AlertRu
             AlertRule.id == rule_id, AlertRule.organization_id == user.organization_id, AlertRule.deleted_at.is_(None)
         )
     )
-    if rule is None:
+    if rule is None or not await _rule_in_scope(db, user, rule.resource_id, rule.project_id, rule.environment_id):
         raise NotFoundError("Alert rule not found.")
     return rule
 
@@ -321,7 +373,7 @@ async def update_rule(
     rule_id: uuid.UUID, body: AlertRuleIn, request: Request, db: DbSession, user: Manager
 ) -> AlertRule:
     rule = await _rule(db, user, rule_id)
-    await _validate_rule(db, user, body)
+    await _validate_rule(db, user, body, existing=rule)
     for field, value in _rule_values(body).items():
         setattr(rule, field, value)
     if not rule.enabled:
@@ -361,7 +413,7 @@ async def delete_rule(rule_id: uuid.UUID, request: Request, db: DbSession, user:
 
 
 @router.get("/notification-channels", response_model=list[ChannelOut])
-async def list_channels(db: DbSession, user: Manager) -> list[NotificationChannel]:
+async def list_channels(db: DbSession, user: OrgManager) -> list[NotificationChannel]:
     return list(
         await db.scalars(
             select(NotificationChannel).where(
@@ -390,7 +442,7 @@ async def _check_secret_ref(db: DbSession, user: CurrentUser, secret_ref: str) -
 
 
 @router.post("/notification-channels", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
-async def create_channel(body: ChannelIn, request: Request, db: DbSession, user: Manager) -> NotificationChannel:
+async def create_channel(body: ChannelIn, request: Request, db: DbSession, user: OrgManager) -> NotificationChannel:
     if body.channel_type == EMAIL_CHANNEL:
         raise ValidationFailedError("Create email notifications as an email list (Alerts > Email notifications).")
     sender = get_sender(body.channel_type)
@@ -419,7 +471,7 @@ async def create_channel(body: ChannelIn, request: Request, db: DbSession, user:
 
 
 @router.delete("/notification-channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
-async def delete_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
+async def delete_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: OrgManager) -> None:
     channel = await db.scalar(
         select(NotificationChannel).where(
             NotificationChannel.id == channel_id,
@@ -443,7 +495,7 @@ async def delete_channel(channel_id: uuid.UUID, request: Request, db: DbSession,
 
 
 @router.post("/notification-channels/{channel_id}/test", response_model=dict[str, str])
-async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> dict[str, str]:
+async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: OrgManager) -> dict[str, str]:
     channel = await db.scalar(
         select(NotificationChannel).where(
             NotificationChannel.id == channel_id,
@@ -507,7 +559,7 @@ async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, u
 
 
 @router.get("/notifications/email-status", response_model=EmailStatusOut)
-async def get_email_status(user: Viewer) -> dict[str, object]:
+async def get_email_status(user: OrgViewer) -> dict[str, object]:
     """Whether this deployment can send email (no endpoints or addresses)."""
     return email_status()
 
@@ -614,7 +666,7 @@ def _audit_details(channel: NotificationChannel) -> dict[str, object]:
 
 
 @router.get("/notifications/email-lists", response_model=list[EmailListOut])
-async def list_email_lists(db: DbSession, user: Manager) -> list[EmailListOut]:
+async def list_email_lists(db: DbSession, user: OrgManager) -> list[EmailListOut]:
     channels = list(
         await db.scalars(
             select(NotificationChannel)
@@ -630,7 +682,7 @@ async def list_email_lists(db: DbSession, user: Manager) -> list[EmailListOut]:
 
 
 @router.post("/notifications/email-lists", response_model=EmailListOut, status_code=status.HTTP_201_CREATED)
-async def create_email_list(body: EmailListIn, request: Request, db: DbSession, user: Manager) -> EmailListOut:
+async def create_email_list(body: EmailListIn, request: Request, db: DbSession, user: OrgManager) -> EmailListOut:
     await _validate_email_scope(db, user, body.project_id, body.environment_id)
     channel = NotificationChannel(
         organization_id=user.organization_id,
@@ -659,7 +711,7 @@ async def create_email_list(body: EmailListIn, request: Request, db: DbSession, 
 
 @router.patch("/notifications/email-lists/{list_id}", response_model=EmailListOut)
 async def update_email_list(
-    list_id: uuid.UUID, body: EmailListUpdate, request: Request, db: DbSession, user: Manager
+    list_id: uuid.UUID, body: EmailListUpdate, request: Request, db: DbSession, user: OrgManager
 ) -> EmailListOut:
     channel = await _email_list(db, user, list_id)
     current = EmailList.from_channel(channel)
@@ -695,7 +747,7 @@ async def update_email_list(
 
 
 @router.delete("/notifications/email-lists/{list_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
-async def delete_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
+async def delete_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: OrgManager) -> None:
     channel = await _email_list(db, user, list_id)
     channel.deleted_at = datetime.now(UTC)
     await record_audit(
@@ -711,7 +763,7 @@ async def delete_email_list(list_id: uuid.UUID, request: Request, db: DbSession,
 
 
 @router.post("/notifications/email-lists/{list_id}/test", response_model=dict[str, str])
-async def test_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> dict[str, str]:
+async def test_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: OrgManager) -> dict[str, str]:
     channel = await _email_list(db, user, list_id)
     lst = EmailList.from_channel(channel)
     problem = await send_test_email(lst)
@@ -740,7 +792,7 @@ async def test_email_list(list_id: uuid.UUID, request: Request, db: DbSession, u
 
 
 @router.get("/notifications/teams-setup", response_model=TeamsSetupOut)
-async def get_teams_setup(db: DbSession, user: Manager) -> dict[str, str]:
+async def get_teams_setup(db: DbSession, user: OrgManager) -> dict[str, str]:
     settings = get_settings()
     if settings.key_vault_url:
         source = "key_vault"
@@ -812,7 +864,7 @@ def _teams_audit(channel: NotificationChannel) -> dict[str, object]:
 
 
 @router.get("/notifications/teams-channels", response_model=list[TeamsChannelOut])
-async def list_teams_channels(db: DbSession, user: Manager) -> list[TeamsChannelOut]:
+async def list_teams_channels(db: DbSession, user: OrgManager) -> list[TeamsChannelOut]:
     channels = [
         c
         for c in await db.scalars(
@@ -830,7 +882,9 @@ async def list_teams_channels(db: DbSession, user: Manager) -> list[TeamsChannel
 
 
 @router.post("/notifications/teams-channels", response_model=TeamsChannelOut, status_code=status.HTTP_201_CREATED)
-async def create_teams_channel(body: TeamsChannelIn, request: Request, db: DbSession, user: Manager) -> TeamsChannelOut:
+async def create_teams_channel(
+    body: TeamsChannelIn, request: Request, db: DbSession, user: OrgManager
+) -> TeamsChannelOut:
     await _check_secret_ref(db, user, body.secret_ref)
     await _validate_email_scope(db, user, body.project_id, body.environment_id)
     channel = NotificationChannel(
@@ -859,7 +913,7 @@ async def create_teams_channel(body: TeamsChannelIn, request: Request, db: DbSes
 
 @router.patch("/notifications/teams-channels/{channel_id}", response_model=TeamsChannelOut)
 async def update_teams_channel(
-    channel_id: uuid.UUID, body: TeamsChannelUpdate, request: Request, db: DbSession, user: Manager
+    channel_id: uuid.UUID, body: TeamsChannelUpdate, request: Request, db: DbSession, user: OrgManager
 ) -> TeamsChannelOut:
     channel = await _teams_channel(db, user, channel_id)
     current = TeamsSubscription.from_channel(channel)
@@ -899,7 +953,7 @@ async def update_teams_channel(
 @router.delete(
     "/notifications/teams-channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
 )
-async def delete_teams_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
+async def delete_teams_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: OrgManager) -> None:
     channel = await _teams_channel(db, user, channel_id)
     channel.deleted_at = datetime.now(UTC)
     await record_audit(
@@ -955,7 +1009,7 @@ async def set_health_threshold(
     body: HealthThresholdIn,
     request: Request,
     db: DbSession,
-    user: Annotated[CurrentUser, Depends(require(Permission.manage_settings))],
+    user: Annotated[CurrentUser, Depends(require_all_projects(Permission.manage_settings))],
 ) -> HealthRuleOut:
     monitor = get_monitor(body.monitor_key)
     rule = next((r for r in monitor.health_rules if r.metric == body.metric_name), None)

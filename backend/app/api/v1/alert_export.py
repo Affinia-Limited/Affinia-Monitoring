@@ -44,6 +44,7 @@ async def azure_export(
         recipients=emails,
         group_name=action_group_name(action_group_name_),
         covered_only=covered_only,
+        access=user.access,
     )
     # Counts only: recipient addresses are personal data and never written to the audit log.
     await record_audit(

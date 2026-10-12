@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/form";
 import { EmptyState, ErrorState } from "@/components/ui/states";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import type { Project } from "@/types/api";
 import { CreateProjectDialog } from "./ProjectForm";
@@ -36,7 +37,9 @@ function matches(p: Project, term: string): boolean {
 export function ProjectsPage() {
   const refetchInterval = useRefreshInterval(60_000);
   const projects = useQuery({ queryKey: ["projects"], queryFn: endpoints.projects, refetchInterval });
-  const canManage = usePermission(PERMISSIONS.manageProjects);
+  // New projects belong to the whole organisation: only users with access to all projects create them.
+  const { unrestricted } = useAccess();
+  const canManage = usePermission(PERMISSIONS.manageProjects) && unrestricted;
   const [params, setParams] = useSearchParams();
   const [term, setTerm] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");

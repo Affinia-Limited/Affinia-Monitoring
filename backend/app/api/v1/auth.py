@@ -7,7 +7,8 @@ from fastapi import APIRouter, Request
 from app.api.deps import CurrentUserDep, DbSession
 from app.core.config import get_settings
 from app.models import Organization, User
-from app.schemas.misc import MeOut
+from app.schemas.misc import MeOut, UserAccessOut
+from app.services.access_grants import access_views, grants_by_user
 from app.services.audit import record_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -31,6 +32,13 @@ async def auth_config() -> dict[str, object]:
 async def _me(db: DbSession, user: CurrentUserDep) -> MeOut:
     org = await db.get(Organization, user.organization_id)
     settings = get_settings()
+    member = await db.get(User, user.id)
+    if member is not None:
+        access = (await access_views(db, [member], await grants_by_user(db, user.organization_id, [user.id])))[user.id]
+        # The effective scope decides (e.g. development sign-in is unrestricted).
+        access.unrestricted = user.access.unrestricted
+    else:
+        access = UserAccessOut(unrestricted=user.access.unrestricted)
     return MeOut(
         id=user.id,
         organization_id=user.organization_id,
@@ -42,6 +50,7 @@ async def _me(db: DbSession, user: CurrentUserDep) -> MeOut:
         role_managed_by_entra=user.role_managed_by_entra,
         auth_mode=settings.auth_mode.value,
         azure_provider=settings.azure_provider.value,
+        access=access,
     )
 
 

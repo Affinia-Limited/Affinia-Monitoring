@@ -11,7 +11,7 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, or_, select, true
 
 from app.api.deps import CurrentUser, DbSession, require
 from app.core.permissions import Permission
@@ -64,12 +64,20 @@ async def search(
 
     projects = {
         p.id: p
-        for p in await db.scalars(select(Project).where(Project.organization_id == org, Project.deleted_at.is_(None)))
+        for p in await db.scalars(
+            select(Project).where(
+                Project.organization_id == org, Project.deleted_at.is_(None), user.access.project_filter()
+            )
+        )
     }
     environments = {
         e.id: e
         for e in await db.scalars(
-            select(Environment).where(Environment.organization_id == org, Environment.deleted_at.is_(None))
+            select(Environment).where(
+                Environment.organization_id == org,
+                Environment.deleted_at.is_(None),
+                user.access.environment_filter(),
+            )
         )
         if e.project_id in projects
     }
@@ -117,7 +125,12 @@ async def search(
     resources = list(
         await db.scalars(
             select(Resource)
-            .where(Resource.organization_id == org, Resource.deleted_at.is_(None), or_(*conditions))
+            .where(
+                Resource.organization_id == org,
+                Resource.deleted_at.is_(None),
+                user.access.resource_filter(),
+                or_(*conditions),
+            )
             .order_by(Resource.name)
             .limit(limit)
         )
@@ -148,6 +161,7 @@ async def search(
             .where(
                 Alert.organization_id == org,
                 Alert.status.in_(OPEN_ALERT_STATUSES),
+                user.access.resource_filter(),
                 or_(func.lower(Alert.title).like(like, escape="\\"), func.lower(Resource.name).like(like, escape="\\")),
             )
             .order_by(Alert.started_at.desc())
@@ -186,9 +200,11 @@ async def search(
             )
         )
 
+    # Subscriptions are organisation-level: only with access to all projects.
     for s in await db.scalars(
         select(Subscription).where(
             Subscription.organization_id == org,
+            true() if user.access.unrestricted else false(),
             Subscription.deleted_at.is_(None),
             or_(
                 func.lower(Subscription.display_name).like(like, escape="\\"),

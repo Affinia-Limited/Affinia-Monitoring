@@ -98,8 +98,8 @@ Roles reuse the existing model (`app/core/permissions.py`). See [api.md](api.md#
 
 | Role | Can manage users |
 | --- | --- |
-| Super Admin | Yes (`users:manage`) |
-| Admin | No |
+| Super Admin | Yes (`users:manage`), everyone |
+| Admin | Yes (`users:manage`), only members whose access lies inside the Admin's own |
 | Operator | No |
 | Viewer | No |
 
@@ -109,6 +109,31 @@ Rules enforced by the API, regardless of the UI:
 2. Nobody can assign a role above their own, or manage a user ranked above them. Therefore only a Super Admin can create, change or remove a Super Admin, and an Admin could never promote themselves even if given `users:manage`.
 3. The organisation always keeps **at least one active Super Admin**. The last one cannot be demoted, suspended or deactivated (`409 LAST_SUPER_ADMIN`). The check locks the Super Admin rows, so two concurrent changes cannot both pass.
 4. If the token carries Entra app roles (`Monitoring.*`, see [entra-id.md](entra-id.md)), they decide the role of an **already approved** user, and the role cannot be edited in-app. App roles **never** grant access by themselves.
+
+5. A manager sees and manages only members ranked no higher **and** whose access lies entirely inside the manager's own (see below). A member with "all projects" can be managed only by managers who have all projects; Super Admins only by Super Admins. Others return `404`.
+6. A manager can only grant access they have themselves (`403 ACCESS_OUT_OF_SCOPE`); only managers with all projects can grant "all projects".
+
+## 8a. Access: projects, environments, resources
+
+A member's **role** decides *what* they may do; their **access** decides *where*. Access is a set of grants, applied hierarchically:
+
+| Grant | The member sees |
+| --- | --- |
+| All projects | Everything, including resources not yet assigned to a project (unrestricted) |
+| A project | That project, all its environments and resources |
+| An environment of a project | That environment and its resources (the project appears with only that environment) |
+| A resource in an environment | That resource only, while it stays in that environment |
+
+Super Admins are always unrestricted and have no grants. A member without grants sees nothing. Every existing member received an "all projects" grant on upgrade, so nobody lost access.
+
+Examples:
+
+- **Viewer on CRM only**: read-only CRM dashboards, resources and alerts; PRISM does not exist for them (direct links return 404).
+- **Operator on CRM / Production**: can acknowledge alerts, run log queries and re-evaluate health for CRM Production resources only.
+- **Admin on PRISM**: manages PRISM (name, environments, alert rules and template coverage for PRISM, resource assignment within PRISM) and the members whose access lies inside PRISM. Cannot create projects, change a project's tag values (they decide which project claims a resource), or change organisation settings: Azure connections, notification channels, Teams, email lists, alert template defaults, the audit log. Those need all projects (`403 SCOPE_REQUIRED`).
+- **Viewer with two resources**: sees exactly those two, in their project and environment.
+
+Set access when inviting (required unless the role is Super Admin) and change it at any time with **Users > user > Access** (`PUT /api/v1/users/{id}/access`), without removing the user. Changes take effect on the member's next request. Changing access and inviting are audited with project, environment and resource names (`user.access_changed`, `user.invited`).
 
 ## 9. Tenant restriction
 

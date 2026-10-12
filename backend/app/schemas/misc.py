@@ -9,6 +9,64 @@ from pydantic import BaseModel, Field
 from app.schemas.common import ORMModel
 
 
+class AccessGrantIn(BaseModel):
+    """``{"project_id": null}`` is "all projects". Otherwise project, then optionally one of its
+    environments, then optionally one resource in that environment."""
+
+    project_id: uuid.UUID | None = None
+    environment_id: uuid.UUID | None = None
+    resource_id: uuid.UUID | None = None
+
+
+class AccessGrantOut(BaseModel):
+    id: uuid.UUID
+    project_id: uuid.UUID | None
+    project_name: str | None
+    environment_id: uuid.UUID | None
+    environment_name: str | None
+    resource_id: uuid.UUID | None
+    resource_name: str | None
+
+
+class UserAccessOut(BaseModel):
+    #: Super Admin, or an "all projects" grant.
+    unrestricted: bool
+    grants: list[AccessGrantOut] = Field(default_factory=list)
+
+
+class UserAccessUpdate(BaseModel):
+    grants: list[AccessGrantIn] = Field(max_length=500)
+
+
+class AssignableEnvironmentOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    kind: str
+    #: The caller has the whole environment (may grant it, or any resource in it).
+    full: bool
+
+
+class AssignableProjectOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    #: The caller has the whole project (may grant it as a whole).
+    full: bool
+    environments: list[AssignableEnvironmentOut]
+
+
+class AssignableScopeOut(BaseModel):
+    #: The caller may grant "all projects".
+    unrestricted: bool
+    projects: list[AssignableProjectOut]
+
+
+class AssignableResourceOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    type_display_name: str
+    monitored: bool
+
+
 class MeOut(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -20,6 +78,8 @@ class MeOut(BaseModel):
     role_managed_by_entra: bool
     auth_mode: str
     azure_provider: str
+    #: Where the caller may act. Super Admins: unrestricted with no grants.
+    access: UserAccessOut
 
 
 RoleKey = Literal["super_admin", "admin", "operator", "viewer"]
@@ -42,6 +102,7 @@ class UserOut(ORMModel):
     deactivated_at: datetime | None
     created_at: datetime
     created_by_name: str | None = None
+    access: UserAccessOut = Field(default_factory=lambda: UserAccessOut(unrestricted=False))
 
 
 class UserDetailOut(UserOut):
@@ -55,6 +116,8 @@ class UserInvite(BaseModel):
     email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     role_key: RoleKey = "viewer"
     display_name: str | None = Field(default=None, max_length=200)
+    #: Required (non-empty) unless the role is super_admin, which is always unrestricted.
+    grants: list[AccessGrantIn] = Field(default_factory=list, max_length=500)
 
 
 class UserUpdate(BaseModel):

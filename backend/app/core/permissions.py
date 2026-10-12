@@ -53,6 +53,8 @@ _ADMIN = _OPERATOR | {
     Permission.manage_projects,
     Permission.manage_alerts,
     Permission.view_audit,
+    # Within their own access only (see app.services.user_management).
+    Permission.manage_users,
 }
 
 _SUPER_ADMIN: set[Permission] = set(Permission)
@@ -66,7 +68,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
 
 ROLE_DESCRIPTIONS: dict[Role, str] = {
     Role.super_admin: "Full control, including user and platform settings.",
-    Role.admin: "Manage projects, Azure connections, dashboards and alert rules.",
+    Role.admin: "Manage projects, dashboards, alert rules and users within their assigned access; with "
+    "access to all projects also Azure connections and notification settings.",
     Role.operator: "View everything, run log queries, acknowledge alerts and trigger syncs.",
     Role.viewer: "Read-only access to dashboards, resources and alerts.",
 }

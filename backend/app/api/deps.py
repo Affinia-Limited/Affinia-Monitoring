@@ -16,12 +16,13 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import AccessScope, load_access_scope
 from app.core.cache import get_cache
 from app.core.config import AuthMode, get_settings
 from app.core.errors import AccessNotGrantedError, AuthenticationError, PermissionDeniedError, RateLimitedError
@@ -68,6 +69,8 @@ class CurrentUser:
     role: Role
     permissions: frozenset[Permission]
     role_managed_by_entra: bool
+    #: Where the caller may act (projects / environments / resources). Default-deny.
+    access: AccessScope = field(default_factory=AccessScope.nothing)
 
     def has(self, permission: Permission) -> bool:
         return permission in self.permissions
@@ -120,6 +123,10 @@ async def get_current_user(
     if settings.auth_mode is AuthMode.dev:
         user.role_key = Role(settings.dev_user_role).value
     role = Role(user.role_key)
+    if settings.auth_mode is AuthMode.dev:
+        scope = AccessScope.everything()  # local development only (refused elsewhere at start-up)
+    else:
+        scope = await load_access_scope(db, user.organization_id, user.id, super_admin=role is Role.super_admin)
     current = CurrentUser(
         id=user.id,
         organization_id=user.organization_id,
@@ -128,6 +135,7 @@ async def get_current_user(
         role=role,
         permissions=permissions_for(role),
         role_managed_by_entra=user.role_managed_by_entra,
+        access=scope,
     )
     # Interactive sign-ins are audited by POST /auth/session; this covers resumed sessions.
     if is_new_session and not request.url.path.endswith("/auth/session"):
@@ -162,6 +170,20 @@ def require(*permissions: Permission) -> Callable[..., Coroutine[Any, Any, Curre
             )
             await db.commit()
             raise PermissionDeniedError()
+        return user
+
+    return _dependency
+
+
+def require_all_projects(*permissions: Permission) -> Callable[..., Coroutine[Any, Any, CurrentUser]]:
+    """``require(...)`` plus access to all projects: for organisation-wide settings and data
+    (Azure connections, notification channels, audit log, organisation defaults)."""
+    role_check = require(*permissions)
+
+    # A default rather than an Annotated hint: with postponed annotations FastAPI cannot see the
+    # local ``role_check`` and would treat ``user`` as a query parameter.
+    async def _dependency(user: CurrentUser = Depends(role_check)) -> CurrentUser:
+        user.access.require_unrestricted()
         return user
 
     return _dependency

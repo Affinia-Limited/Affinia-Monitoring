@@ -20,7 +20,7 @@ PROJECT = {"name": "X", "slug": "x"}
         ("viewer", "GET", "/api/v1/azure/identity", None, False),
         ("admin", "GET", "/api/v1/azure/identity", None, True),
         ("viewer", "GET", "/api/v1/users", None, False),
-        ("admin", "GET", "/api/v1/users", None, False),
+        ("admin", "GET", "/api/v1/users", None, True),
         ("super_admin", "GET", "/api/v1/users", None, True),
         ("viewer", "GET", "/api/v1/audit-logs", None, False),
         ("admin", "GET", "/api/v1/audit-logs", None, True),

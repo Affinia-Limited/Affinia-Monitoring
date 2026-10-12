@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import Azure, CurrentUser, DbSession, require
 from app.api.v1.common import TimeRangeDep
-from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
 from app.models import Environment, Project, Resource
 from app.schemas.misc import ComparisonOut
@@ -41,26 +41,43 @@ Manager = Annotated[CurrentUser, Depends(require(Permission.manage_projects))]
 
 
 async def _get_project(db: DbSession, user: CurrentUser, project_id: uuid.UUID) -> Project:
+    """A project the caller can see something in (404 otherwise, so its existence is not revealed)."""
     project = await db.scalar(
         select(Project)
         .where(Project.id == project_id, Project.organization_id == user.organization_id, Project.deleted_at.is_(None))
         .options(selectinload(Project.environments))
     )
-    if project is None:
+    if project is None or not user.access.can_see_project(project.id):
         raise NotFoundError("Project not found.")
     return project
 
 
+async def _get_managed_project(db: DbSession, user: CurrentUser, project_id: uuid.UUID) -> Project:
+    """A project the caller may manage: it must be granted to them as a whole."""
+    project = await _get_project(db, user, project_id)
+    if not user.access.has_full_project(project.id):
+        raise PermissionDeniedError("You need access to the whole project to change it.", code="ACCESS_OUT_OF_SCOPE")
+    return project
+
+
 async def _project_views(db: DbSession, user: CurrentUser, projects: list[Project]) -> list[ProjectOut]:
-    """Projects with health of their *monitored* resources (inventory items carry no health signal)."""
-    scopes = await health_by_scope(db, user.organization_id, [p.id for p in projects])
-    alerts = await active_alert_counts_by_project(db, user.organization_id)
-    env_alerts = await active_alert_counts_by_environment(db, user.organization_id)
+    """Projects with health of their *monitored* resources (inventory items carry no health signal).
+
+    Environments, health and alert counts cover only what the caller may see.
+    """
+    visible = user.access.resource_filter()
+    scopes = await health_by_scope(db, user.organization_id, [p.id for p in projects], resource_scope=visible)
+    alerts = await active_alert_counts_by_project(db, user.organization_id, resource_scope=visible)
+    env_alerts = await active_alert_counts_by_environment(db, user.organization_id, resource_scope=visible)
     views = []
     for project in projects:
         out = ProjectOut.model_validate(project, from_attributes=True)
+        if not user.access.has_full_project(project.id):
+            out.tag_values = []
         envs = []
         for env in project.environments:
+            if not user.access.can_see_environment(env.id):
+                continue
             scope = scopes.get((project.id, env.id), ScopeHealth())
             summary = EnvironmentSummary.model_validate(env, from_attributes=True)
             summary.health = scope.counts
@@ -83,7 +100,11 @@ async def list_projects(db: DbSession, user: Viewer) -> list[ProjectOut]:
     projects = list(
         await db.scalars(
             select(Project)
-            .where(Project.organization_id == user.organization_id, Project.deleted_at.is_(None))
+            .where(
+                Project.organization_id == user.organization_id,
+                Project.deleted_at.is_(None),
+                user.access.project_filter(),
+            )
             .options(selectinload(Project.environments))
             .order_by(Project.name)
         )
@@ -93,6 +114,8 @@ async def list_projects(db: DbSession, user: Viewer) -> list[ProjectOut]:
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectIn, request: Request, db: DbSession, user: Manager) -> ProjectOut:
+    # A new project claims resources by its tag values across the organisation.
+    user.access.require_unrestricted()
     exists = await db.scalar(
         select(Project.id).where(
             Project.organization_id == user.organization_id, Project.slug == body.slug, Project.deleted_at.is_(None)
@@ -152,8 +175,14 @@ async def get_project(project_id: uuid.UUID, db: DbSession, user: Viewer) -> Pro
 async def update_project(
     project_id: uuid.UUID, body: ProjectUpdate, request: Request, db: DbSession, user: Manager
 ) -> ProjectOut:
-    project = await _get_project(db, user, project_id)
+    project = await _get_managed_project(db, user, project_id)
     changes = body.model_dump(exclude_unset=True)
+    renames = "name" in changes and changes["name"] != project.name
+    retags = "tag_values" in changes and list(changes["tag_values"] or []) != list(project.tag_values or [])
+    if renames or retags:
+        # The name and tag values decide which project claims a resource during discovery, across
+        # the whole organisation: renaming could pull in other projects' or unassigned resources.
+        user.access.require_unrestricted()
     for field, value in changes.items():
         setattr(project, field, value)
     await record_audit(
@@ -174,7 +203,7 @@ async def update_project(
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_project(project_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
-    project = await _get_project(db, user, project_id)
+    project = await _get_managed_project(db, user, project_id)
     now = datetime.now(UTC)
     project.deleted_at = now
     # Suffix the slug so it can be reused by a new project.
@@ -200,7 +229,7 @@ async def delete_project(project_id: uuid.UUID, request: Request, db: DbSession,
 async def create_environment(
     project_id: uuid.UUID, body: EnvironmentIn, request: Request, db: DbSession, user: Manager
 ) -> Environment:
-    project = await _get_project(db, user, project_id)
+    project = await _get_managed_project(db, user, project_id)
     if any(e.slug == body.slug for e in project.environments):
         raise ConflictError("An environment with this slug already exists.", code="ENVIRONMENT_EXISTS")
     env = Environment(
@@ -234,6 +263,8 @@ async def create_environment(
 
 
 async def _get_env(db: DbSession, user: CurrentUser, project_id: uuid.UUID, env_id: uuid.UUID) -> Environment:
+    """An environment of a project the caller may manage as a whole."""
+    await _get_managed_project(db, user, project_id)
     env = await db.scalar(
         select(Environment).where(
             Environment.id == env_id,
@@ -306,4 +337,11 @@ async def environment_comparison(
     user: Annotated[CurrentUser, Depends(require(Permission.view_dashboards))],
 ) -> ComparisonOut:
     project = await _get_project(db, user, project_id)
-    return await compare_environments(db, azure, project, time_range)
+    return await compare_environments(
+        db,
+        azure,
+        project,
+        time_range,
+        environments=[e for e in project.environments if user.access.can_see_environment(e.id)],
+        resource_scope=user.access.resource_filter(),
+    )

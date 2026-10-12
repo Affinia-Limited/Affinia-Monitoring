@@ -3,6 +3,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
+import { useAccess } from "@/hooks/useAccess";
 import { useRefreshInterval } from "@/stores/live";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { ConfirmButton, PageHeader } from "@/components/common";
@@ -26,16 +27,20 @@ import { AddEnvironmentDialog } from "./ProjectForm";
 
 function EditProjectDialog({ project, open, onOpenChange }: { project: Project; open: boolean; onOpenChange: (o: boolean) => void }) {
   const qc = useQueryClient();
+  // The name and tag values decide which Azure resources a project claims, across the organisation.
+  const { unrestricted } = useAccess();
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description);
   const [tags, setTags] = useState(project.tag_values.join(", "));
   const mutation = useMutation({
-    mutationFn: () =>
-      endpoints.updateProject(project.id, {
-        name,
-        description,
-        tag_values: tags.split(",").map((t) => t.trim()).filter(Boolean),
-      }),
+    mutationFn: () => {
+      const tagValues = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      const changes: Partial<Pick<Project, "name" | "description" | "tag_values">> = {};
+      if (name !== project.name) changes.name = name;
+      if (description !== project.description) changes.description = description;
+      if (tagValues.join("|") !== project.tag_values.join("|")) changes.tag_values = tagValues;
+      return endpoints.updateProject(project.id, changes);
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["projects"] });
       void qc.invalidateQueries({ queryKey: ["project", project.id] });
@@ -53,14 +58,18 @@ function EditProjectDialog({ project, open, onOpenChange }: { project: Project; 
         }
       >
         <div className="space-y-3">
-          <Field label="Name" htmlFor="edit-project-name">
-            <Input id="edit-project-name" value={name} onChange={(e) => setName(e.target.value)} />
+          <Field
+            label="Name"
+            htmlFor="edit-project-name"
+            hint={unrestricted ? undefined : "The name and tag values decide which Azure resources belong to the project, so changing them needs access to all projects."}
+          >
+            <Input id="edit-project-name" value={name} disabled={!unrestricted} onChange={(e) => setName(e.target.value)} />
           </Field>
           <Field label="Description" htmlFor="edit-project-description">
             <Textarea id="edit-project-description" value={description} onChange={(e) => setDescription(e.target.value)} />
           </Field>
           <Field label="Tag values" htmlFor="edit-project-tags">
-            <Input id="edit-project-tags" value={tags} onChange={(e) => setTags(e.target.value)} />
+            <Input id="edit-project-tags" value={tags} disabled={!unrestricted} onChange={(e) => setTags(e.target.value)} />
           </Field>
           {mutation.isError ? <ErrorState error={mutation.error} /> : null}
         </div>

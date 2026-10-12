@@ -25,6 +25,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.access import AccessScope
 from app.core.errors import NotFoundError, ValidationFailedError
 from app.models import (
     AlertRule,
@@ -170,10 +171,14 @@ async def _scope(
     project_id: uuid.UUID | None,
     environment_id: uuid.UUID | None,
     resource_id: uuid.UUID | None,
+    access: AccessScope,
 ) -> None:
-    if project_id and not await db.scalar(
-        select(Project.id).where(
-            Project.id == project_id, Project.organization_id == organization_id, Project.deleted_at.is_(None)
+    if project_id and (
+        not access.can_see_project(project_id)
+        or not await db.scalar(
+            select(Project.id).where(
+                Project.id == project_id, Project.organization_id == organization_id, Project.deleted_at.is_(None)
+            )
         )
     ):
         raise NotFoundError("Project not found.")
@@ -185,16 +190,18 @@ async def _scope(
                 Environment.deleted_at.is_(None),
             )
         )
-        if env is None:
+        if env is None or not access.can_see_environment(env.id):
             raise NotFoundError("Environment not found.")
         if project_id and env.project_id != project_id:
             raise ValidationFailedError("The environment does not belong to the selected project.")
-    if resource_id and not await db.scalar(
-        select(Resource.id).where(
-            Resource.id == resource_id, Resource.organization_id == organization_id, Resource.deleted_at.is_(None)
+    if resource_id:
+        resource = await db.scalar(
+            select(Resource).where(
+                Resource.id == resource_id, Resource.organization_id == organization_id, Resource.deleted_at.is_(None)
+            )
         )
-    ):
-        raise NotFoundError("Resource not found.")
+        if resource is None or not access.can_see_resource(resource):
+            raise NotFoundError("Resource not found.")
 
 
 def _rule_applies(rule: AlertRule, resource: Resource) -> bool:
@@ -409,11 +416,15 @@ async def build_export(
     recipients: list[str] | None = None,
     group_name: str = DEFAULT_ACTION_GROUP,
     covered_only: bool = False,
+    access: AccessScope | None = None,
 ) -> dict[str, Any]:
-    await _scope(db, organization_id, project_id, environment_id, resource_id)
+    """``access`` limits the export to the caller's resources (unrestricted when omitted)."""
+    access = access or AccessScope.everything()
+    await _scope(db, organization_id, project_id, environment_id, resource_id, access)
     query = select(Resource).where(
         Resource.organization_id == organization_id,
         Resource.deleted_at.is_(None),
+        access.resource_filter(),
         Resource.monitor_key.is_not(None),
         Resource.monitor_key.notin_([k for k in UNMONITORED_KEYS if k]),
     )
@@ -487,6 +498,17 @@ async def build_export(
                 if key not in related_cache:
                     related_cache[key] = await related_resource(db, resource, relation)
                 found = related_cache[key]
+                if found is not None and not access.can_see_resource(found):
+                    # Never identify a resource outside the caller's access.
+                    skipped.append(
+                        {
+                            "resource_name": resource.name,
+                            "rule": f"{candidate.rule_label}: {definition.label}",
+                            "reason": f"{definition.label} is measured on the related "
+                            f"{relation.replace('_', ' ')}, which is outside your access.",
+                        }
+                    )
+                    continue
                 if found is None:
                     skipped.append(
                         {

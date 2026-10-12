@@ -8,6 +8,8 @@ import { Field, Input, Select } from "@/components/ui/form";
 import { ErrorState } from "@/components/ui/states";
 import { useToast } from "@/components/ui/toast";
 import type { Me, RoleKey, UserOut, UserStatus } from "@/types/api";
+import { type AccessSelection, EMPTY_SELECTION, grantsFromSelection, selectionError, selectionFromGrants } from "@/utils/access";
+import { AccessEditor } from "./AccessEditor";
 
 export const ROLE_LABELS: Record<RoleKey, string> = {
   super_admin: "Super Admin",
@@ -54,6 +56,8 @@ export function availableActions(user: UserOut, me: Me | undefined) {
   return {
     self,
     changeRole: manageable && !user.role_managed_by_entra && user.status !== "deactivated",
+    // Super Admins always see everything, so there is no access to edit.
+    editAccess: manageable && user.role_key !== "super_admin" && user.status !== "deactivated",
     suspend: manageable && user.status === "active",
     reactivate: manageable && (user.status === "suspended" || user.status === "deactivated"),
     deactivate: manageable && user.status !== "deactivated",
@@ -213,13 +217,25 @@ export function AddUserDialog({ me, open, onClose }: { me: Me | undefined; open:
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<RoleKey>("viewer");
+  const [access, setAccess] = useState<AccessSelection>(EMPTY_SELECTION);
+  const [attempted, setAttempted] = useState(false);
+  const isSuperAdmin = role === "super_admin";
+  const accessError = selectionError(access, isSuperAdmin);
   const reset = () => {
     setEmail("");
     setDisplayName("");
     setRole("viewer");
+    setAccess(EMPTY_SELECTION);
+    setAttempted(false);
   };
   const mutation = useMutation({
-    mutationFn: () => endpoints.inviteUser({ email: email.trim(), role_key: role, display_name: displayName.trim() || null }),
+    mutationFn: () =>
+      endpoints.inviteUser({
+        email: email.trim(),
+        role_key: role,
+        display_name: displayName.trim() || null,
+        grants: isSuperAdmin ? [] : grantsFromSelection(access),
+      }),
     onSuccess: async (created) => {
       notify({
         tone: "success",
@@ -262,7 +278,8 @@ export function AddUserDialog({ me, open, onClose }: { me: Me | undefined; open:
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
-            if (valid) mutation.mutate();
+            setAttempted(true);
+            if (valid && !accessError) mutation.mutate();
           }}
         >
           <Field
@@ -292,8 +309,62 @@ export function AddUserDialog({ me, open, onClose }: { me: Me | undefined; open:
               ))}
             </Select>
           </Field>
+          <AccessEditor value={access} onChange={setAccess} isSuperAdmin={isSuperAdmin} error={attempted ? accessError : null} />
           {mutation.isError ? <ErrorState error={mutation.error} /> : null}
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Changes what an existing user may see, without removing and re-adding them. */
+export function EditAccessDialog({ user, open, onClose }: { user: UserOut; open: boolean; onClose: () => void }) {
+  const invalidate = useInvalidateUsers();
+  const { notify } = useToast();
+  const [access, setAccess] = useState<AccessSelection>(() => selectionFromGrants(user.access.grants));
+  const [attempted, setAttempted] = useState(false);
+  const isSuperAdmin = user.role_key === "super_admin";
+  const accessError = selectionError(access, isSuperAdmin);
+  const mutation = useMutation({
+    mutationFn: () => endpoints.updateUserAccess(user.id, grantsFromSelection(access)),
+    onSuccess: async () => {
+      notify({ tone: "success", title: `Access updated for ${userName(user)}`, description: "It applies from their next request." });
+      await invalidate(user.id);
+      onClose();
+    },
+  });
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) {
+          mutation.reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent
+        title="Edit access"
+        description={`Choose what ${userName(user)} can see and work with. Their role (${ROLE_LABELS[user.role_key]}) decides what they can do within it.`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              disabled={mutation.isPending || isSuperAdmin}
+              onClick={() => {
+                setAttempted(true);
+                if (!accessError) mutation.mutate();
+              }}
+            >
+              Save access
+            </Button>
+          </>
+        }
+      >
+        <AccessEditor value={access} onChange={setAccess} isSuperAdmin={isSuperAdmin} error={attempted ? accessError : null} />
+        {mutation.isError ? <ErrorState error={mutation.error} className="mt-3" /> : null}
       </DialogContent>
     </Dialog>
   );

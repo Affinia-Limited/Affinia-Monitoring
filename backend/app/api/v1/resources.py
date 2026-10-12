@@ -9,7 +9,7 @@ from sqlalchemy import Select, case, func, or_, select
 from app.api.deps import Azure, CurrentUser, DbSession, require
 from app.api.v1.common import TimeRangeDep
 from app.core.cache import cache_key, get_cache
-from app.core.errors import NotFoundError, ValidationFailedError
+from app.core.errors import NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Permission
 from app.models import AzureConnection, Environment, Project, Resource, Subscription
 from app.schemas.common import Page
@@ -130,7 +130,12 @@ Filters = Annotated[dict[str, Any], Depends(resource_filters)]
 
 
 def _base(user: CurrentUser) -> Select:  # type: ignore[type-arg]
-    return select(Resource).where(Resource.organization_id == user.organization_id, Resource.deleted_at.is_(None))
+    """Resources of the organisation that the caller may see."""
+    return select(Resource).where(
+        Resource.organization_id == user.organization_id,
+        Resource.deleted_at.is_(None),
+        user.access.resource_filter(),
+    )
 
 
 @router.get("", response_model=Page[ResourceOut])
@@ -214,8 +219,9 @@ async def list_monitors(user: Viewer) -> list[dict[str, object]]:
 
 
 async def _resource(db: DbSession, user: CurrentUser, resource_id: uuid.UUID) -> Resource:
+    """A resource the caller may see (404 otherwise, so its existence is not revealed)."""
     resource = await resource_in_org(db, user.organization_id, resource_id)
-    if resource is None:
+    if resource is None or not user.access.can_see_resource(resource):
         raise NotFoundError("Resource not found.")
     return resource
 
@@ -229,7 +235,8 @@ async def get_resource(resource_id: uuid.UUID, db: DbSession, user: Viewer) -> R
     related: dict[str, uuid.UUID | None] = {}
     for relation in monitor.related(resource.resource_type, resource.azure_id, resource.properties or {}):
         target = await related_resource(db, resource, relation)
-        related[relation] = target.id if target else None
+        # Related resources outside the caller's scope are not identified.
+        related[relation] = target.id if target and user.access.can_see_resource(target) else None
     connection = await db.get(AzureConnection, resource.connection_id)
     tenant = connection.tenant_id if connection else ""
     return ResourceDetail(
@@ -273,6 +280,12 @@ async def resource_metrics(
         raise ValidationFailedError("Request between 1 and 20 metrics.")
     tenant = await tenant_for_resource(db, resource)
     data = await MetricService(db, azure).get_metrics(resource, tenant, keys, time_range)
+    for d in data:
+        # Metrics may come from a related resource (e.g. the App Service Plan); name it only if visible.
+        if d.source_resource_id and d.source_resource_id != str(resource.id):
+            source = await db.get(Resource, uuid.UUID(d.source_resource_id))
+            if source is None or not user.access.can_see_resource(source):
+                d.source_resource_id = None
     return MetricsResponse(
         resource_id=resource.id,
         start=time_range.start,
@@ -286,7 +299,7 @@ async def resource_related(resource_id: uuid.UUID, relation: str, db: DbSession,
     if relation not in {"children", "apps_on_plan", "app_service_plan", "app_insights"}:
         raise NotFoundError("Unknown relation.")
     resource = await _resource(db, user, resource_id)
-    items = await related_resources(db, resource, relation)
+    items = [r for r in await related_resources(db, resource, relation) if user.access.can_see_resource(r)]
     lookups = await load_lookups(db, user.organization_id, items)
     return [resource_view(r, lookups) for r in items]
 
@@ -296,6 +309,23 @@ async def assign_resource(
     resource_id: uuid.UUID, body: ResourceAssignment, request: Request, db: DbSession, user: Manager
 ) -> ResourceOut:
     resource = await _resource(db, user, resource_id)
+    # Moving a resource needs both its current place and its destination to be the caller's.
+    if resource.environment_id is not None:
+        source_ok = user.access.has_full_environment(resource.environment_id)
+    else:
+        source_ok = user.access.has_full_project(resource.project_id)
+    if not source_ok:
+        raise PermissionDeniedError(
+            "You need access to the resource's whole environment to move it.", code="ACCESS_OUT_OF_SCOPE"
+        )
+    if body.project_id is None:
+        # Unassigned resources are visible only with access to all projects.
+        user.access.require_unrestricted()
+    elif body.environment_id is not None:
+        if not user.access.has_full_environment(body.environment_id):
+            raise NotFoundError("Environment not found.")
+    elif not user.access.has_full_project(body.project_id):
+        raise NotFoundError("Project not found.")
     if body.project_id:
         project = await db.scalar(
             select(Project).where(

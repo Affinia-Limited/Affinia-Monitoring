@@ -11,6 +11,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field, Input, Switch } from "@/components/ui/form";
 import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import type { Connection } from "@/types/api";
 import { formatDateTime, titleCase } from "@/utils/format";
@@ -102,6 +103,7 @@ function EditDialog({ connection, onClose }: { connection: Connection; onClose: 
 
 export function AzureConnectionsPage() {
   const qc = useQueryClient();
+  const access = useAccess();
   const canConnect = usePermission(PERMISSIONS.connectAzure);
   const canSync = usePermission(PERMISSIONS.syncAzure);
   const [wizard, setWizard] = useState(false);
@@ -110,6 +112,8 @@ export function AzureConnectionsPage() {
   const connections = useQuery({
     queryKey: ["connections"],
     queryFn: endpoints.connections,
+    // Organisation-wide: not requested at all for users scoped to some projects.
+    enabled: access.unrestricted,
     refetchInterval: (q) =>
       (q.state.data as Connection[] | undefined)?.some((c) => c.latest_run && ["queued", "running"].includes(c.latest_run.status)) ? 3000 : false,
   });
@@ -117,6 +121,20 @@ export function AzureConnectionsPage() {
     mutationFn: (id: string) => endpoints.syncConnection(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["connections"] }),
   });
+
+  if (access.loaded && !access.unrestricted) {
+    return (
+      <>
+        <PageHeader title="Azure Connections" />
+        <Card>
+          <EmptyState
+            title="This area needs access to all projects"
+            description="Azure subscriptions are shared by every project. Ask an administrator with access to all projects to manage them."
+          />
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
@@ -132,7 +150,7 @@ export function AzureConnectionsPage() {
         }
       />
       {sync.isError ? <ErrorState error={sync.error} className="mb-3" /> : null}
-      {connections.isLoading ? (
+      {!access.loaded || connections.isLoading ? (
         <LoadingBlock />
       ) : connections.isError ? (
         <ErrorState error={connections.error} />

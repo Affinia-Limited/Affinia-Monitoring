@@ -30,6 +30,50 @@ export interface Me {
   role_managed_by_entra: boolean;
   auth_mode: "entra" | "dev";
   azure_provider: "azure" | "mock";
+  /** What the signed-in user may see. Super Admins (and "All projects" grants) are unrestricted. */
+  access: UserAccess;
+}
+
+/** One access grant: a whole project, one environment of a project, or one resource. Null = "all". */
+export interface AccessGrant {
+  id: string;
+  project_id: string | null;
+  project_name: string | null;
+  environment_id: string | null;
+  environment_name: string | null;
+  resource_id: string | null;
+  resource_name: string | null;
+}
+
+/** ``[{ project_id: null }]`` grants all projects. */
+export interface AccessGrantIn {
+  project_id: string | null;
+  environment_id?: string | null;
+  resource_id?: string | null;
+}
+
+export interface UserAccess {
+  unrestricted: boolean;
+  grants: AccessGrant[];
+}
+
+/** What the current user may grant to others. */
+export interface AssignableScope {
+  unrestricted: boolean;
+  projects: {
+    id: string;
+    name: string;
+    /** The granter may grant the whole project. */
+    full: boolean;
+    environments: { id: string; name: string; kind: string; full: boolean }[];
+  }[];
+}
+
+export interface AssignableResource {
+  id: string;
+  name: string;
+  type_display_name: string;
+  monitored: boolean;
 }
 
 export interface HealthCounts {
@@ -560,6 +604,7 @@ export interface UserOut {
   deactivated_at: string | null;
   created_at: string;
   created_by_name: string | null;
+  access: UserAccess;
 }
 
 /** Returned only to user administrators: includes the Entra identity binding. */
@@ -572,6 +617,8 @@ export interface UserInvite {
   email: string;
   role_key: RoleKey;
   display_name?: string | null;
+  /** Required unless the role is Super Admin. */
+  grants: AccessGrantIn[];
 }
 
 export interface RoleOut {
@@ -863,4 +910,15 @@ export interface AlertPlan {
   template: AlertTemplate | null;
   assignment: AlertTemplateAssignment | null;
   rules: AlertPlanRule[];
+}
+
+/** The coverage that decides for an environment (its own, else its project's, else organisation-wide). */
+export interface EffectiveCoverage {
+  scope: "environment" | "project" | "organization" | null;
+  /** True when the deciding coverage is on. */
+  covered: boolean;
+  /** e.g. "CRM / Production", "CRM (all environments)", "All projects". */
+  label: string | null;
+  /** The deciding coverage itself, only when it lies within the current user's access. */
+  assignment: AlertTemplateAssignment | null;
 }

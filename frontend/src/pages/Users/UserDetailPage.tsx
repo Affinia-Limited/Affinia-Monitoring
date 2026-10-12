@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Pencil } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { endpoints } from "@/api/endpoints";
@@ -9,10 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import { formatDateTime } from "@/utils/format";
 import { UserActionsMenu } from "./UsersPage";
-import { ROLE_LABELS, userName, UserStatusBadge } from "./userShared";
+import type { UserDetail } from "@/types/api";
+import { accessSummary } from "./UsersPage";
+import { availableActions, EditAccessDialog, ROLE_LABELS, userName, UserStatusBadge } from "./userShared";
 
 const AUDIT_PAGE_SIZE = 20;
 
@@ -80,9 +83,60 @@ function AuditHistory({ userId }: { userId: string }) {
   );
 }
 
+function grantLabel(g: UserDetail["access"]["grants"][number]): string {
+  if (!g.project_id) return "All projects";
+  if (!g.environment_id) return `${g.project_name ?? "Project"}: all environments`;
+  if (!g.resource_id) return `${g.project_name ?? "Project"} / ${g.environment_name ?? "Environment"}: all resources`;
+  return `${g.project_name ?? "Project"} / ${g.environment_name ?? "Environment"} / ${g.resource_name ?? "Resource"}`;
+}
+
+/** Which projects, environments and resources the user can see; their role decides what they can do there. */
+function AccessCard({ user, canEdit }: { user: UserDetail; canEdit: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const superAdmin = user.role_key === "super_admin";
+  const grants = user.access?.grants ?? [];
+  return (
+    <Card>
+      <CardHeader
+        title="Projects and resources"
+        description={`What ${userName(user)} can see. Their role (${ROLE_LABELS[user.role_key]}) decides what they can do within it.`}
+        actions={
+          canEdit ? (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+              <Pencil /> Edit access
+            </Button>
+          ) : null
+        }
+      />
+      <CardContent>
+        {superAdmin ? (
+          <p className="text-sm">Everything. Super Admins always have access to all projects, environments and resources.</p>
+        ) : user.access?.unrestricted ? (
+          <p className="text-sm">All projects, including projects created later.</p>
+        ) : grants.length === 0 ? (
+          <p className="text-sm text-warning">No access yet: this user can sign in but sees no projects.</p>
+        ) : (
+          <>
+            <p className="mb-2 text-sm text-muted-foreground">{accessSummary(user)}</p>
+            <ul className="space-y-1 text-sm" aria-label="Access grants">
+              {grants.map((g) => (
+                <li key={g.id} className="rounded-md border border-border px-3 py-1.5">
+                  {grantLabel(g)}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+      {editing ? <EditAccessDialog user={user} open={editing} onClose={() => setEditing(false)} /> : null}
+    </Card>
+  );
+}
+
 export function UserDetailPage() {
   const { userId = "" } = useParams();
   const { data: me } = useMe();
+  const access = useAccess();
   const canManage = usePermission(PERMISSIONS.manageUsers);
   const user = useQuery({ queryKey: ["user", userId], queryFn: () => endpoints.user(userId), enabled: canManage && !!userId });
 
@@ -113,8 +167,9 @@ export function UserDetailPage() {
         actions={<UserActionsMenu user={u} me={me} />}
       />
       <div className="space-y-4">
+        <AccessCard user={u} canEdit={availableActions(u, me).editAccess} />
         <Card>
-          <CardHeader title="Access" />
+          <CardHeader title="Account" />
           <CardContent>
             <KeyValue
               items={[
@@ -157,7 +212,7 @@ export function UserDetailPage() {
             />
           </CardContent>
         </Card>
-        <AuditHistory userId={u.id} />
+        {access.unrestricted ? <AuditHistory userId={u.id} /> : null}
       </div>
     </>
   );

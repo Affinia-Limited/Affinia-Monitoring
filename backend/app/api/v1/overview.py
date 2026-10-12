@@ -131,7 +131,7 @@ async def _azure_feeds(db: DbSession, azure: Azure, user: CurrentUser, locations
     useful = []
     for c in changes:
         r = known.get(c["azure_id"])
-        if r is None or r.monitor_key in (None, "generic"):
+        if r is None or r.monitor_key in (None, "generic") or not user.access.can_see_resource(r):
             continue
         c["resource_id"] = str(r.id)
         c["resource_name"] = r.name
@@ -139,12 +139,19 @@ async def _azure_feeds(db: DbSession, azure: Azure, user: CurrentUser, locations
         c["changed_by"] = _who(c.get("changed_by"))
         useful.append(c)
     useful.sort(key=lambda c: c.get("changed_at") or "", reverse=True)
-    return {"service_health": service_health[:10], "recent_changes": useful[:8], "feed_errors": errors}
+    # Connection names and errors are organisation-level details.
+    return {
+        "service_health": service_health[:10] if user.access.unrestricted else [],
+        "recent_changes": useful[:8],
+        "feed_errors": errors if user.access.unrestricted else [],
+    }
 
 
 @router.get("")
 async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
     org = user.organization_id
+    # Everything below covers only the caller's projects, environments and resources.
+    visible = user.access.resource_filter()
     resources = (
         await db.execute(
             select(
@@ -154,7 +161,7 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
                 Resource.resource_type,
                 Resource.monitor_key,
                 Resource.location,
-            ).where(Resource.organization_id == org, Resource.deleted_at.is_(None))
+            ).where(Resource.organization_id == org, Resource.deleted_at.is_(None), visible)
         )
     ).all()
     # Health figures cover monitored resources only; inventory items (NICs, DNS zones, ...) have no signals.
@@ -162,7 +169,7 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
     projects = list(
         await db.scalars(
             select(Project)
-            .where(Project.organization_id == org, Project.deleted_at.is_(None))
+            .where(Project.organization_id == org, Project.deleted_at.is_(None), user.access.project_filter())
             .options(selectinload(Project.environments))
             .order_by(Project.name)
         )
@@ -185,6 +192,7 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
                 Alert.organization_id == org,
                 Alert.status.in_(["active", "acknowledged"]),
                 Resource.deleted_at.is_(None),
+                visible,
             )
             .group_by(Alert.severity)
         )
@@ -197,20 +205,22 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
                 Alert.organization_id == org,
                 Alert.status.in_(["active", "acknowledged"]),
                 Resource.deleted_at.is_(None),
+                visible,
             )
             .order_by(Alert.started_at.desc())
             .limit(10)
         )
     )
 
-    scopes = await health_by_scope(db, org)
-    project_alerts = await active_alert_counts_by_project(db, org)
-    env_alerts = await active_alert_counts_by_environment(db, org)
+    scopes = await health_by_scope(db, org, resource_scope=visible)
+    project_alerts = await active_alert_counts_by_project(db, org, resource_scope=visible)
+    env_alerts = await active_alert_counts_by_environment(db, org, resource_scope=visible)
     env_status_counts = {"healthy": 0, "warning": 0, "critical": 0, "unknown": 0}
     project_health = []
+    visible_envs = {p.id: [e for e in p.environments if user.access.can_see_environment(e.id)] for p in projects}
     for p in projects:
         envs = []
-        for e in p.environments:
+        for e in visible_envs[p.id]:
             scope = scopes.get((p.id, e.id), ScopeHealth())
             env_status_counts[scope.status] = env_status_counts.get(scope.status, 0) + 1
             envs.append(
@@ -268,6 +278,7 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
                 Resource.deleted_at.is_(None),
                 Resource.monitor_key.notin_(["generic"]),
                 Resource.health_status.in_(["critical", "warning"]),
+                visible,
             )
             .order_by(Resource.health_status.asc(), Resource.name)  # "critical" sorts before "warning"
             .limit(12)
@@ -300,9 +311,11 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
         "environment_health": env_status_counts,
         "totals": {
             "projects": len(projects),
-            "environments": sum(len(p.environments) for p in projects),
-            "subscriptions": int(subscriptions or 0),
-            "connections": int(connections or 0),
+            "environments": sum(len(envs) for envs in visible_envs.values()),
+            # Organisation-level: scoped members get 0 (the UI shows its "connect Azure" state only
+            # to members with access to all projects).
+            "subscriptions": int(subscriptions or 0) if user.access.unrestricted else 0,
+            "connections": int(connections or 0) if user.access.unrestricted else 0,
             "resources": len(resources),
             "monitored_resources": len(monitored),
             "inventory_resources": len(resources) - len(monitored),

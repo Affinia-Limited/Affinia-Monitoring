@@ -7,6 +7,7 @@ import type {
   AlertRuleIn,
   AlertTemplate,
   AlertTemplateAssignment,
+  EffectiveCoverage,
   AlertTemplateAssignmentIn,
   AuditEntry,
   AvailableSubscription,
@@ -50,6 +51,9 @@ import type {
   SearchResult,
   SubscriptionOut,
   SyncRun,
+  AccessGrantIn,
+  AssignableResource,
+  AssignableScope,
   UserDetail,
   UserInvite,
   UserOut,
@@ -117,6 +121,8 @@ export const endpoints = {
   resetTemplateRule: (monitorKey: string, metric: string) =>
     send<TemplateRule>("delete", `/alert-templates/${monitorKey}/rules/${metric}`),
   templateAssignments: (params: Params = {}) => get<AlertTemplateAssignment[]>("/alert-template-assignments", params),
+  effectiveCoverage: (environmentId: string) =>
+    get<EffectiveCoverage>("/alert-template-assignments/effective", { environment_id: environmentId }),
   createTemplateAssignment: (body: AlertTemplateAssignmentIn) =>
     send<AlertTemplateAssignment>("post", "/alert-template-assignments", body),
   updateTemplateAssignment: (id: string, body: Pick<AlertTemplateAssignmentIn, "enabled" | "overrides" | "notification_channel_ids">) =>
@@ -168,6 +174,10 @@ export const endpoints = {
   user: (id: string) => get<UserDetail>(`/users/${id}`),
   userAudit: (id: string, params: Params) => get<Page<AuditEntry>>(`/users/${id}/audit`, params),
   inviteUser: (body: UserInvite) => send<UserDetail>("post", "/users/invite", body),
+  updateUserAccess: (id: string, grants: AccessGrantIn[]) => send<UserDetail>("put", `/users/${id}/access`, { grants }),
+  assignableScope: () => get<AssignableScope>("/users/assignable-scope"),
+  assignableResources: (environmentId: string, params: Params) =>
+    get<AssignableResource[]>(`/users/assignable-scope/environments/${environmentId}/resources`, params),
   updateUser: (id: string, body: { role_key?: RoleKey; display_name?: string }) =>
     send<UserDetail>("patch", `/users/${id}`, body),
   setUserStatus: (id: string, action: UserStatusAction) => send<UserDetail>("post", `/users/${id}/${action}`),

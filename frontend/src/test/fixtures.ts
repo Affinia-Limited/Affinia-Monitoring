@@ -30,6 +30,7 @@ export function me(overrides: Partial<Me> = {}): Me {
     role_managed_by_entra: false,
     auth_mode: "dev",
     azure_provider: "mock",
+    access: { unrestricted: true, grants: [] },
     ...overrides,
   };
 }

@@ -27,6 +27,7 @@ function user(overrides: Partial<UserOut> = {}): UserOut {
     deactivated_at: null,
     created_at: "2026-09-30T10:00:00Z",
     created_by_name: "Test Admin",
+    access: { unrestricted: true, grants: [] },
     ...overrides,
   };
 }
@@ -92,8 +93,11 @@ describe("Users page", () => {
     expect(submit).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Microsoft Entra email or UPN"), "new@example.test");
     await userEvent.selectOptions(within(dialog).getByLabelText("Role"), "operator");
+    await userEvent.click(await within(dialog).findByRole("radio", { name: "All projects" }));
     await userEvent.click(submit);
-    await waitFor(() => expect(body).toEqual({ email: "new@example.test", role_key: "operator", display_name: null }));
+    await waitFor(() =>
+      expect(body).toEqual({ email: "new@example.test", role_key: "operator", display_name: null, grants: [{ project_id: null }] }),
+    );
     expect(await screen.findByText("new@example.test added")).toBeInTheDocument();
   });
 
@@ -108,6 +112,7 @@ describe("Users page", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Add user" }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.type(within(dialog).getByLabelText("Microsoft Entra email or UPN"), "john@example.test");
+    await userEvent.click(await within(dialog).findByRole("radio", { name: "All projects" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add user" }));
     expect(await within(dialog).findByText("A user with this email address already exists.")).toBeInTheDocument();
   });

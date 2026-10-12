@@ -1,5 +1,6 @@
 """Import every model so Alembic and ``Base.metadata`` see the full schema."""
 
+from app.models.access import UserAccessGrant
 from app.models.alert import (
     Alert,
     AlertEvent,
@@ -35,5 +36,6 @@ __all__ = [
     "Subscription",
     "SyncRun",
     "User",
+    "UserAccessGrant",
     "UserStatus",
 ]

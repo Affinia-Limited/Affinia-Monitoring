@@ -56,7 +56,8 @@ async def _user(user_id: uuid.UUID | str) -> User:
 
 
 async def _invite(client: httpx.AsyncClient, email: str, role: str = "viewer", **extra: Any) -> dict[str, Any]:
-    response = await client.post("/api/v1/users/invite", json={"email": email, "role_key": role, **extra}, headers=SA)
+    body = {"email": email, "role_key": role, "grants": [{"project_id": None}], **extra}
+    response = await client.post("/api/v1/users/invite", json=body, headers=SA)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -291,7 +292,7 @@ async def test_suspension_takes_effect_on_the_next_request(client: httpx.AsyncCl
 
 
 @pytest.mark.parametrize(
-    ("role", "allowed"), [("viewer", False), ("operator", False), ("admin", False), ("super_admin", True)]
+    ("role", "allowed"), [("viewer", False), ("operator", False), ("admin", True), ("super_admin", True)]
 )
 async def test_only_user_managers_can_manage_users(client: httpx.AsyncClient, role: str, allowed: bool) -> None:
     headers = auth_headers(role)
@@ -299,7 +300,11 @@ async def test_only_user_managers_can_manage_users(client: httpx.AsyncClient, ro
     calls = [
         await client.get("/api/v1/users", headers=headers),
         await client.get(f"/api/v1/users/{target}", headers=headers),
-        await client.post("/api/v1/users/invite", json={"email": f"{role}-new@example.test"}, headers=headers),
+        await client.post(
+            "/api/v1/users/invite",
+            json={"email": f"{role}-new@example.test", "grants": [{"project_id": None}]},
+            headers=headers,
+        ),
         await client.patch(f"/api/v1/users/{target}", json={"role_key": "operator"}, headers=headers),
         await client.post(f"/api/v1/users/{target}/suspend", headers=headers),
         await client.get(f"/api/v1/users/{target}/audit", headers=headers),
@@ -413,10 +418,14 @@ async def test_invitation_rules(client: httpx.AsyncClient) -> None:
     assert again["id"] == first["id"] and again["role_key"] == "operator"
 
     await add_member("active-oid", email="taken@example.test")
-    conflict = await client.post("/api/v1/users/invite", json={"email": "taken@example.test"}, headers=SA)
+    conflict = await client.post(
+        "/api/v1/users/invite", json={"email": "taken@example.test", "grants": [{"project_id": None}]}, headers=SA
+    )
     assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "USER_EXISTS"
 
-    bad = await client.post("/api/v1/users/invite", json={"email": "not-an-email"}, headers=SA)
+    bad = await client.post(
+        "/api/v1/users/invite", json={"email": "not-an-email", "grants": [{"project_id": None}]}, headers=SA
+    )
     assert bad.status_code == 422
 
     # Revoking an unredeemed invitation, then reactivating it, re-opens the invitation.

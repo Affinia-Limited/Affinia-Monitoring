@@ -13,6 +13,7 @@ import { AsOfLastCheck, LiveMark } from "@/components/live";
 import { shortReason, topReason } from "@/components/resourceSignals";
 import { ProjectCard, ProjectCardSkeleton } from "@/components/projects/ProjectCard";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/states";
+import { useAccess } from "@/hooks/useAccess";
 import { useLiveResources } from "@/hooks/useLiveResources";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import { useRefreshInterval } from "@/stores/live";
@@ -246,8 +247,20 @@ function RecentChanges({ changes }: { changes: Overview["recent_changes"] }) {
 
 export function OverviewPage() {
   const refetchInterval = useRefreshInterval(60_000);
-  const query = useQuery({ queryKey: ["overview"], queryFn: endpoints.overview, refetchInterval });
+  const access = useAccess();
+  const noAccess = access.loaded && !access.unrestricted && access.grants.length === 0;
+  const query = useQuery({ queryKey: ["overview"], queryFn: endpoints.overview, refetchInterval, enabled: !noAccess });
   const { data: me } = useMe();
+  if (noAccess) {
+    return (
+      <Card className="mt-6">
+        <EmptyState
+          title="You don't have access to any projects yet"
+          description="Ask an administrator to grant access to the projects, environments or resources you work with."
+        />
+      </Card>
+    );
+  }
   if (query.isLoading) return <OverviewSkeleton />;
   if (query.isError || !query.data) {
     return <ErrorState error={query.error} title="Unable to load the overview." onRetry={() => void query.refetch()} className="mt-6" />;
@@ -255,7 +268,8 @@ export function OverviewPage() {
   const o = query.data;
   const name = firstName(me?.display_name);
 
-  if (o.totals.connections === 0) {
+  // Connection counts are organisation-level: scoped members always get 0, so only they skip this state.
+  if (o.totals.connections === 0 && access.unrestricted) {
     return (
       <Card className="mt-6">
         <EmptyState

@@ -134,12 +134,17 @@ async def add_member(
     status: str = "active",
     tenant: str = TEST_TENANT,
     email: str | None = None,
+    all_projects: bool = True,
     **fields: Any,
 ) -> uuid.UUID:
-    """Inserts a user row directly (an approved member, or with ``oid=None`` an invitation)."""
+    """Inserts a user row directly (an approved member, or with ``oid=None`` an invitation).
+
+    Members other than Super Admins get an "all projects" grant unless ``all_projects=False``
+    (as every existing member did when scoped access was introduced).
+    """
     from sqlalchemy import select
 
-    from app.models import Organization, User
+    from app.models import Organization, User, UserAccessGrant
 
     async with get_sessionmaker()() as session:
         org = await session.scalar(select(Organization).where(Organization.entra_tenant_id == tenant))
@@ -154,6 +159,9 @@ async def add_member(
             **fields,
         )
         session.add(user)
+        await session.flush()
+        if all_projects and role != "super_admin":
+            session.add(UserAccessGrant(organization_id=org.id, user_id=user.id, project_id=None))
         await session.commit()
         return user.id
 
@@ -174,7 +182,7 @@ async def database() -> AsyncIterator[None]:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     from app.core.permissions import ROLE_PERMISSIONS
-    from app.models import Organization, Role, User
+    from app.models import Organization, Role, User, UserAccessGrant
 
     async with get_sessionmaker()() as session:
         for role, perms in ROLE_PERMISSIONS.items():
@@ -186,17 +194,20 @@ async def database() -> AsyncIterator[None]:
             session.add(org)
             await session.flush()
             for role in ROLE_PERMISSIONS:
-                session.add(
-                    User(
-                        organization_id=org.id,
-                        entra_tenant_id=tenant,
-                        entra_object_id=member_oid(role.value, tenant),
-                        email=f"{role.value}@example.test",
-                        display_name=f"Test {role.value}",
-                        role_key=role.value,
-                        status="active",
-                    )
+                member = User(
+                    organization_id=org.id,
+                    entra_tenant_id=tenant,
+                    entra_object_id=member_oid(role.value, tenant),
+                    email=f"{role.value}@example.test",
+                    display_name=f"Test {role.value}",
+                    role_key=role.value,
+                    status="active",
                 )
+                session.add(member)
+                await session.flush()
+                # Seeded members keep access to everything (as existing members did on upgrade).
+                if role.value != "super_admin":
+                    session.add(UserAccessGrant(organization_id=org.id, user_id=member.id, project_id=None))
         await session.commit()
     set_cache(MemoryCache())
     set_azure_services(None)

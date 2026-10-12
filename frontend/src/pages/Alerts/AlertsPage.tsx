@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { AlertsExplorer } from "@/components/AlertsExplorer";
 import { PageHeader } from "@/components/common";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import { useFilters } from "@/stores/filters";
 import { AlertDetailDrawer } from "./AlertDetailDrawer";
@@ -16,7 +17,11 @@ export function AlertsPage() {
   const [params, setParams] = useSearchParams();
   const { projectId, environmentId } = useFilters();
   const canManage = usePermission(PERMISSIONS.manageAlerts);
-  const tab = ["templates", "rules", "teams", "channels", "email", "export"].includes(params.get("tab") ?? "") ? (params.get("tab") as string) : "alerts";
+  // Notification settings (Teams, email, channels) are organisation-wide: they need access to all projects.
+  const { unrestricted } = useAccess();
+  const canManageOrg = canManage && unrestricted;
+  const allowed = ["templates", "rules", ...(canManage ? ["export"] : []), ...(canManageOrg ? ["teams", "channels", "email"] : [])];
+  const tab = allowed.includes(params.get("tab") ?? "") ? (params.get("tab") as string) : "alerts";
   // ?alert=<id> (e.g. from global search) opens the alert drawer.
   const selected = params.get("alert");
   const setSelected = (id: string | null) =>
@@ -49,9 +54,9 @@ export function AlertsPage() {
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="templates">Alert templates</TabsTrigger>
           <TabsTrigger value="rules">Custom rules</TabsTrigger>
-          {canManage ? <TabsTrigger value="teams">Microsoft Teams</TabsTrigger> : null}
-          {canManage ? <TabsTrigger value="email">Email notifications</TabsTrigger> : null}
-          {canManage ? <TabsTrigger value="channels">Notification channels</TabsTrigger> : null}
+          {canManageOrg ? <TabsTrigger value="teams">Microsoft Teams</TabsTrigger> : null}
+          {canManageOrg ? <TabsTrigger value="email">Email notifications</TabsTrigger> : null}
+          {canManageOrg ? <TabsTrigger value="channels">Notification channels</TabsTrigger> : null}
           {canManage ? <TabsTrigger value="export">Export to Azure</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="alerts">
@@ -63,17 +68,17 @@ export function AlertsPage() {
         <TabsContent value="rules">
           <AlertRules />
         </TabsContent>
-        {canManage ? (
+        {canManageOrg ? (
           <TabsContent value="teams">
             <TeamsNotifications />
           </TabsContent>
         ) : null}
-        {canManage ? (
+        {canManageOrg ? (
           <TabsContent value="email">
             <EmailNotifications />
           </TabsContent>
         ) : null}
-        {canManage ? (
+        {canManageOrg ? (
           <TabsContent value="channels">
             <NotificationChannels />
           </TabsContent>

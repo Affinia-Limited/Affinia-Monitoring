@@ -1,6 +1,6 @@
 import { AlertTriangle, Inbox, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
-import { errorMessage } from "@/api/client";
+import { ApiError, errorMessage } from "@/api/client";
 import { cn } from "@/utils/cn";
 
 export function Skeleton({ className }: { className?: string }) {
@@ -73,6 +73,8 @@ export function ErrorState({
   onRetry?: () => void;
 }) {
   const { message, requestId } = errorMessage(error);
+  // Organisation-wide areas (Azure connections, notification settings, audit) need access to all projects.
+  const heading = title ?? (error instanceof ApiError && error.code === "SCOPE_REQUIRED" ? "This area needs access to all projects" : undefined);
   return (
     <div
       role="alert"
@@ -84,8 +86,8 @@ export function ErrorState({
     >
       <AlertTriangle className="mt-0.5 size-4 shrink-0 text-critical" />
       <div className="min-w-0 flex-1">
-        {title ? <p className="font-medium text-foreground">{title}</p> : null}
-        <p className={title ? "mt-0.5 text-muted-foreground" : "text-foreground"}>{message}</p>
+        {heading ? <p className="font-medium text-foreground">{heading}</p> : null}
+        <p className={heading ? "mt-0.5 text-muted-foreground" : "text-foreground"}>{message}</p>
         {requestId ? <p className="mt-0.5 text-xs text-muted-foreground">Request ID: {requestId}</p> : null}
       </div>
       {onRetry ? (

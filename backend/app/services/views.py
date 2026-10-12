@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Alert, AlertRule, Dashboard, Environment, Project, Resource, Subscription
@@ -131,7 +131,10 @@ async def alert_views(db: AsyncSession, alerts: Sequence[Alert]) -> list[AlertOu
     return views
 
 
-async def active_alert_counts_by_project(db: AsyncSession, organization_id: uuid.UUID) -> dict[uuid.UUID, int]:
+async def active_alert_counts_by_project(
+    db: AsyncSession, organization_id: uuid.UUID, resource_scope: ColumnElement[bool] | None = None
+) -> dict[uuid.UUID, int]:
+    """Open alerts per project; ``resource_scope`` limits them to the caller's resources."""
     rows = await db.execute(
         select(Resource.project_id, func.count(Alert.id))
         .join(Resource, Resource.id == Alert.resource_id)
@@ -139,6 +142,7 @@ async def active_alert_counts_by_project(db: AsyncSession, organization_id: uuid
             Alert.organization_id == organization_id,
             Alert.status.in_(OPEN_ALERT_STATUSES),
             Resource.deleted_at.is_(None),
+            resource_scope if resource_scope is not None else true(),
         )
         .group_by(Resource.project_id)
     )
@@ -146,7 +150,7 @@ async def active_alert_counts_by_project(db: AsyncSession, organization_id: uuid
 
 
 async def active_alert_counts_by_environment(
-    db: AsyncSession, organization_id: uuid.UUID
+    db: AsyncSession, organization_id: uuid.UUID, resource_scope: ColumnElement[bool] | None = None
 ) -> dict[tuple[uuid.UUID, uuid.UUID], int]:
     rows = await db.execute(
         select(Resource.project_id, Resource.environment_id, func.count(Alert.id))
@@ -155,6 +159,7 @@ async def active_alert_counts_by_environment(
             Alert.organization_id == organization_id,
             Alert.status.in_(OPEN_ALERT_STATUSES),
             Resource.deleted_at.is_(None),
+            resource_scope if resource_scope is not None else true(),
         )
         .group_by(Resource.project_id, Resource.environment_id)
     )
@@ -183,7 +188,10 @@ class ScopeHealth:
 
 
 async def health_by_scope(
-    db: AsyncSession, organization_id: uuid.UUID, project_ids: Sequence[uuid.UUID] | None = None
+    db: AsyncSession,
+    organization_id: uuid.UUID,
+    project_ids: Sequence[uuid.UUID] | None = None,
+    resource_scope: ColumnElement[bool] | None = None,
 ) -> dict[tuple[uuid.UUID, uuid.UUID | None], ScopeHealth]:
     """Monitored-resource health keyed by ``(project_id, environment_id)`` and ``(project_id, None)``."""
     query = select(
@@ -197,6 +205,8 @@ async def health_by_scope(
     )
     if project_ids is not None:
         query = query.where(Resource.project_id.in_(project_ids))
+    if resource_scope is not None:
+        query = query.where(resource_scope)
     scopes: dict[tuple[uuid.UUID, uuid.UUID | None], ScopeHealth] = {}
     for pid, eid, status, checked in (await db.execute(query)).all():
         scopes.setdefault((pid, None), ScopeHealth()).add(status, checked)

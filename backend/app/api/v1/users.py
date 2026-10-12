@@ -6,14 +6,20 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, case, func, or_, select
 
-from app.api.deps import CurrentUser, DbSession, require
+from app.api.deps import CurrentUser, DbSession, require, require_all_projects
+from app.core.errors import NotFoundError
 from app.core.permissions import ROLE_DESCRIPTIONS, Permission, Role, permissions_for
-from app.models import AuditLog, User
+from app.models import AuditLog, Environment, Project, Resource, User
 from app.schemas.common import Page
 from app.schemas.misc import (
+    AssignableEnvironmentOut,
+    AssignableProjectOut,
+    AssignableResourceOut,
+    AssignableScopeOut,
     AuditOut,
     RoleKey,
     RoleOut,
+    UserAccessUpdate,
     UserDetailOut,
     UserInvite,
     UserOut,
@@ -21,11 +27,14 @@ from app.schemas.misc import (
     UserUpdate,
 )
 from app.services import user_management
+from app.services.access_grants import access_views, grants_by_user
+from app.services.monitors.registry import type_display_name
 
 router = APIRouter(tags=["users"])
 
 UserManager = Annotated[CurrentUser, Depends(require(Permission.manage_users))]
-Auditor = Annotated[CurrentUser, Depends(require(Permission.view_audit))]
+#: The organisation audit log covers everything, so it needs access to all projects.
+Auditor = Annotated[CurrentUser, Depends(require_all_projects(Permission.view_audit))]
 
 
 @router.get("/roles", response_model=list[RoleOut])
@@ -50,10 +59,16 @@ async def _with_creators(db: DbSession, users: list[User], schema: type[UserOut]
     if creator_ids:
         for creator in await db.scalars(select(User).where(User.id.in_(creator_ids))):
             names[creator.id] = creator.display_name or creator.email or "Unknown"
+    access = (
+        await access_views(db, users, await grants_by_user(db, users[0].organization_id, [u.id for u in users]))
+        if users
+        else {}
+    )
     out = []
     for u in users:
         item = schema.model_validate(u)
         item.created_by_name = names.get(u.created_by_id) if u.created_by_id else None
+        item.access = access[u.id]
         out.append(item)
     return out
 
@@ -81,24 +96,126 @@ async def list_users(
         query = query.where(User.role_key == role)
     if status:
         query = query.where(User.status == status)
-    total = await db.scalar(select(func.count()).select_from(query.subquery()))
     status_rank = case(_STATUS_ORDER, value=User.status, else_=9)
-    rows = list(
-        await db.scalars(
-            query.order_by(status_rank, func.coalesce(func.lower(User.display_name), func.lower(User.email)), User.id)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-    )
-    return Page(items=await _with_creators(db, rows), total=int(total or 0), page=page, page_size=page_size)
+    ordered = query.order_by(status_rank, func.coalesce(func.lower(User.display_name), func.lower(User.email)), User.id)
+    # Only members the caller may manage: ranked no higher, with access inside the caller's.
+    visible = [u for u in await db.scalars(ordered) if await user_management.can_see_member(db, user, u)]
+    rows = visible[(page - 1) * page_size : page * page_size]
+    return Page(items=await _with_creators(db, rows), total=len(visible), page=page, page_size=page_size)
 
 
 @router.post("/users/invite", response_model=UserDetailOut, status_code=201)
 async def invite_user(body: UserInvite, request: Request, db: DbSession, user: UserManager) -> UserOut:
     """Adds a user as a pending invitation. They are activated by their first matching Entra sign-in."""
     target = await user_management.invite(
-        db, user, email=body.email, role=Role(body.role_key), display_name=body.display_name, request=request
+        db,
+        user,
+        email=body.email,
+        role=Role(body.role_key),
+        display_name=body.display_name,
+        request=request,
+        grants=body.grants,
     )
+    await db.commit()
+    return (await _with_creators(db, [target], UserDetailOut))[0]
+
+
+@router.get("/users/assignable-scope", response_model=AssignableScopeOut)
+async def assignable_scope(db: DbSession, user: UserManager) -> AssignableScopeOut:
+    """What the caller may grant: whole projects / environments they hold, and the projects and
+    environments in which they hold individual resources."""
+    projects = list(
+        await db.scalars(
+            select(Project)
+            .where(
+                Project.organization_id == user.organization_id,
+                Project.deleted_at.is_(None),
+                user.access.project_filter(),
+            )
+            .order_by(Project.name)
+        )
+    )
+    envs = list(
+        await db.scalars(
+            select(Environment)
+            .where(
+                Environment.organization_id == user.organization_id,
+                Environment.deleted_at.is_(None),
+                Environment.project_id.in_([p.id for p in projects]),
+                user.access.environment_filter(),
+            )
+            .order_by(Environment.sort_order, Environment.name)
+        )
+    )
+    return AssignableScopeOut(
+        unrestricted=user.access.unrestricted,
+        projects=[
+            AssignableProjectOut(
+                id=p.id,
+                name=p.name,
+                full=user.access.has_full_project(p.id),
+                environments=[
+                    AssignableEnvironmentOut(
+                        id=e.id, name=e.name, kind=e.kind, full=user.access.has_full_environment(e.id)
+                    )
+                    for e in envs
+                    if e.project_id == p.id
+                ],
+            )
+            for p in projects
+        ],
+    )
+
+
+@router.get(
+    "/users/assignable-scope/environments/{environment_id}/resources", response_model=list[AssignableResourceOut]
+)
+async def assignable_resources(
+    environment_id: uuid.UUID,
+    db: DbSession,
+    user: UserManager,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> list[AssignableResourceOut]:
+    """Resources in an environment that the caller may grant individually."""
+    env = await db.scalar(
+        select(Environment).where(
+            Environment.id == environment_id,
+            Environment.organization_id == user.organization_id,
+            Environment.deleted_at.is_(None),
+        )
+    )
+    if env is None or not user.access.can_see_environment(env.id):
+        raise NotFoundError("Environment not found.")
+    query = select(Resource).where(
+        Resource.organization_id == user.organization_id,
+        Resource.deleted_at.is_(None),
+        Resource.project_id == env.project_id,
+        Resource.environment_id == env.id,
+        user.access.resource_filter(),
+    )
+    if q and q.strip():
+        term = "%" + q.strip().lower().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
+        query = query.where(func.lower(Resource.name).like(term, escape="\\"))
+    rows = list(await db.scalars(query.order_by(Resource.name, Resource.id).limit(limit)))
+    return [
+        AssignableResourceOut(
+            id=r.id,
+            name=r.name,
+            type_display_name=type_display_name(r.resource_type, r.monitor_key),
+            monitored=r.monitor_key not in (None, "generic"),
+        )
+        for r in rows
+    ]
+
+
+@router.put("/users/{user_id}/access", response_model=UserDetailOut)
+async def set_user_access(
+    user_id: uuid.UUID, body: UserAccessUpdate, request: Request, db: DbSession, user: UserManager
+) -> UserOut:
+    """Replaces the member's access (projects, environments, resources)."""
+    target = await user_management.get_member(db, user, user_id)
+    await user_management.set_access(db, user, target, body.grants, request)
     await db.commit()
     return (await _with_creators(db, [target], UserDetailOut))[0]
 
@@ -154,7 +271,12 @@ async def user_audit(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> Page[AuditOut]:
-    """Actions performed on this user and by this user."""
+    """Actions performed on this user and by this user.
+
+    Needs access to all projects: the history can name projects and resources outside a scoped
+    administrator's access (for example log queries the member ran before their access changed).
+    """
+    user.access.require_unrestricted()
     target = await user_management.get_member(db, user, user_id)
     query = select(AuditLog).where(
         AuditLog.organization_id == user.organization_id,

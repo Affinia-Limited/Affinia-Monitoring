@@ -22,6 +22,7 @@ function useInvalidateCoverage() {
   return () => {
     void qc.invalidateQueries({ queryKey: ["alert-plan"] });
     void qc.invalidateQueries({ queryKey: ["alert-template-assignments"] });
+    void qc.invalidateQueries({ queryKey: ["alert-coverage-effective"] });
     void qc.invalidateQueries({ queryKey: ["alert-templates"] });
   };
 }
@@ -213,21 +214,12 @@ export function RecommendedAlertsPanel({ resource }: { resource: Resource }) {
   );
 }
 
-/** The coverage that applies to an environment: its own, else its project's, else everything. */
-export function coverageFor(assignments: AlertTemplateAssignment[], projectId: string, environmentId: string): AlertTemplateAssignment | null {
-  return (
-    assignments.find((a) => a.scope === "environment" && a.environment_id === environmentId) ??
-    assignments.find((a) => a.scope === "project" && a.project_id === projectId) ??
-    assignments.find((a) => a.scope === "organization") ??
-    null
-  );
-}
-
 export function EnvironmentAlertCoverage({ projectId, environmentId, environmentName }: { projectId: string; environmentId: string; environmentName: string }) {
   const canManage = usePermission(PERMISSIONS.manageAlerts);
   const invalidate = useInvalidateCoverage();
   const { notify } = useToast();
-  const assignments = useQuery({ queryKey: ["alert-template-assignments"], queryFn: () => endpoints.templateAssignments() });
+  // The server works out which coverage decides (it may be broader than this user's own access).
+  const coverage = useQuery({ queryKey: ["alert-coverage-effective", environmentId], queryFn: () => endpoints.effectiveCoverage(environmentId) });
   const apply = useMutation({
     mutationFn: () => endpoints.createTemplateAssignment({ project_id: projectId, environment_id: environmentId }),
     onSuccess: (created) => {
@@ -235,24 +227,26 @@ export function EnvironmentAlertCoverage({ projectId, environmentId, environment
       notify({ tone: "success", title: "Recommended alerts applied", description: `${environmentName}: ${created.covered_resources} resources covered.` });
     },
   });
-  const coverage = assignments.data ? coverageFor(assignments.data, projectId, environmentId) : null;
-  const on = !!coverage && coverage.enabled;
+  const on = !!coverage.data?.covered;
+  const turnedOff = !!coverage.data && coverage.data.scope === "environment" && !coverage.data.covered;
   return (
     <Card>
       <CardContent className="space-y-2 pt-5">
         <p className="text-sm font-medium">Alert coverage</p>
-        {assignments.isLoading ? (
+        {coverage.isLoading ? (
           <p className="text-sm text-muted-foreground">Checking...</p>
-        ) : on && coverage ? (
+        ) : on ? (
           <p className="text-sm text-muted-foreground">
             <ShieldCheck className="mr-1 inline size-4 text-healthy" aria-hidden="true" />
-            Recommended alerts on, from <span className="font-medium text-foreground">{scopeLabel(coverage)}</span>.
+            Recommended alerts on, from <span className="font-medium text-foreground">{coverage.data?.label}</span>.
           </p>
+        ) : turnedOff ? (
+          <p className="text-sm text-muted-foreground">Recommended alerts are turned off for this environment.</p>
         ) : (
           <p className="text-sm text-muted-foreground">Not covered: resources here only alert through custom rules.</p>
         )}
         <div className="flex flex-wrap gap-2">
-          {!on && canManage ? (
+          {!on && !turnedOff && canManage ? (
             <Button size="sm" disabled={apply.isPending} onClick={() => apply.mutate()}>
               <ShieldCheck /> Apply recommended alerts to this environment
             </Button>

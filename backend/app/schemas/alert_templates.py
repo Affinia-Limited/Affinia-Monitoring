@@ -114,3 +114,16 @@ class AlertPlanOut(BaseModel):
     template: AlertTemplateOut | None
     assignment: AssignmentOut | None
     rules: list[PlanRuleOut]
+
+
+class EffectiveCoverageOut(BaseModel):
+    """Which coverage decides for an environment's resources (most specific wins)."""
+
+    #: ``None`` when no coverage applies at all.
+    scope: Literal["environment", "project", "organization"] | None
+    #: True when the deciding coverage is on; False when nothing applies or it is turned off here.
+    covered: bool
+    #: Human label of the deciding coverage, e.g. "CRM / Production", "CRM (all environments)", "All projects".
+    label: str | None
+    #: The deciding coverage itself, only when it lies within the caller's own access (otherwise ``None``).
+    assignment: AssignmentOut | None

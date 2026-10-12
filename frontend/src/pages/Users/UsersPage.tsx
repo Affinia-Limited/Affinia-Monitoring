@@ -16,11 +16,13 @@ import { LG_ONLY, Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/useDebounce";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import type { Me, UserOut } from "@/types/api";
+import { summariseGrants } from "@/utils/access";
 import { formatDateTime } from "@/utils/format";
 import {
   AddUserDialog,
   availableActions,
   ChangeRoleDialog,
+  EditAccessDialog,
   ROLE_LABELS,
   ROLES,
   StatusActionDialog,
@@ -32,13 +34,20 @@ import {
 
 const PAGE_SIZE = 25;
 
+/** "All projects", "No access" or e.g. "CRM: all environments · PRISM / Production: 2 resources". */
+export function accessSummary(user: UserOut): string {
+  if (user.role_key === "super_admin" || user.access?.unrestricted) return "All projects";
+  return summariseGrants(user.access?.grants ?? []);
+}
+
 export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefined }) {
   const [status, setStatus] = useState<UserStatusAction | null>(null);
   const [roleOpen, setRoleOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
   const actions = availableActions(user, me);
   const name = userName(user);
   if (actions.self) return <span className="text-xs text-muted-foreground">You</span>;
-  const any = actions.changeRole || actions.suspend || actions.reactivate || actions.deactivate;
+  const any = actions.changeRole || actions.editAccess || actions.suspend || actions.reactivate || actions.deactivate;
   return (
     <>
       <DropdownMenu>
@@ -52,6 +61,7 @@ export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefine
             <Link to={`/settings/users/${user.id}`}>View details</Link>
           </DropdownMenuItem>
           {actions.changeRole ? <DropdownMenuItem onSelect={() => setRoleOpen(true)}>Change role</DropdownMenuItem> : null}
+          {actions.editAccess ? <DropdownMenuItem onSelect={() => setAccessOpen(true)}>Edit access</DropdownMenuItem> : null}
           {actions.suspend || actions.reactivate || actions.deactivate ? <DropdownMenuSeparator /> : null}
           {actions.reactivate ? <DropdownMenuItem onSelect={() => setStatus("reactivate")}>Reactivate</DropdownMenuItem> : null}
           {actions.suspend ? <DropdownMenuItem onSelect={() => setStatus("suspend")}>Suspend</DropdownMenuItem> : null}
@@ -64,6 +74,7 @@ export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefine
       </DropdownMenu>
       <StatusActionDialog user={user} action={status} onClose={() => setStatus(null)} />
       {roleOpen ? <ChangeRoleDialog user={user} me={me} open={roleOpen} onClose={() => setRoleOpen(false)} /> : null}
+      {accessOpen ? <EditAccessDialog user={user} open={accessOpen} onClose={() => setAccessOpen(false)} /> : null}
     </>
   );
 }
@@ -169,6 +180,7 @@ export function UsersPage() {
                   <TH>Display name</TH>
                   <TH>Email</TH>
                   <TH>Role</TH>
+                  <TH>Access</TH>
                   <TH>Status</TH>
                   <TH className={LG_ONLY}>Last login</TH>
                   <TH className={LG_ONLY}>Added</TH>
@@ -194,6 +206,9 @@ export function UsersPage() {
                           Entra
                         </Badge>
                       ) : null}
+                    </TD>
+                    <TD className="max-w-72 truncate text-muted-foreground" title={accessSummary(u)}>
+                      {accessSummary(u)}
                     </TD>
                     <TD>
                       <UserStatusBadge status={u.status} />

@@ -20,8 +20,10 @@ Permissions are enforced server-side. A missing permission returns `403 PERMISSI
 | `projects:manage` | | | Yes | Yes |
 | `alerts:manage` | | | Yes | Yes |
 | `audit:view` | | | Yes | Yes |
-| `users:manage` | | | | Yes |
+| `users:manage` | | | Yes | Yes |
 | `settings:manage` | | | | Yes |
+
+Permissions say *what* a member may do; their **access** (projects, environments, resources; see [user-access-management.md](user-access-management.md#8a-access-projects-environments-resources)) says *where*. Objects outside it return `404`. Organisation-wide settings and data (Azure connections and syncs, notification channels, Teams, email lists, alert template defaults, health threshold defaults, the audit log, creating projects, project tag values) also need access to all projects (`403 SCOPE_REQUIRED`). An Admin manages only members whose access lies inside their own.
 
 ## Errors
 
@@ -48,7 +50,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 | Method | Path | Permission | Notes |
 | --- | --- | --- | --- |
 | GET | `/auth/config` | public | Non-secret MSAL settings |
-| GET | `/auth/me` | active member | User, organisation, role, permissions, auth mode, Azure provider. `403 ACCESS_NOT_GRANTED` or `ACCESS_SUSPENDED` if the caller is not an active member |
+| GET | `/auth/me` | active member | User, organisation, role, permissions, auth mode, Azure provider, and `access` (`{unrestricted, grants[]}`). `403 ACCESS_NOT_GRANTED` or `ACCESS_SUSPENDED` if the caller is not an active member |
 | POST | `/auth/session` | active member | Records `user.login_allowed` and updates the last login time |
 
 ## Overview and search
@@ -162,7 +164,10 @@ Alerts are created by the evaluator from alert template assignments and alert ru
 | --- | --- | --- |
 | GET | `/roles` | `dashboards:view` |
 | GET | `/users?q=&role=&status=&page=&page_size=` | `users:manage`. Paged (max 100). `q` searches name and email |
-| POST | `/users/invite` | `users:manage`. Body `{email, role_key, display_name?}`. Creates or refreshes a pending invitation (30 days) |
+| POST | `/users/invite` | `users:manage`. Body `{email, role_key, display_name?, grants}`. `grants` (required unless the role is `super_admin`) is a list of `{project_id, environment_id?, resource_id?}`; `[{"project_id": null}]` is all projects. Only access the caller holds can be granted (`403 ACCESS_OUT_OF_SCOPE`). Creates or refreshes a pending invitation (30 days) |
+| PUT | `/users/{id}/access` | `users:manage`. Body `{grants}`. Replaces the member's access (normalised; empty means no access). `422` for Super Admins and for your own access |
+| GET | `/users/assignable-scope` | `users:manage`. `{unrestricted, projects: [{id, name, full, environments: [{id, name, kind, full}]}]}`: what the caller may grant |
+| GET | `/users/assignable-scope/environments/{id}/resources?q=&limit=` | `users:manage`. Resources in that environment the caller may grant individually; `404` if the environment is not visible |
 | GET | `/users/{id}` | `users:manage`. Includes `entra_object_id` and `entra_tenant_id` |
 | PATCH | `/users/{id}` | `users:manage`. Body `{role_key?, display_name?}` |
 | POST | `/users/{id}/suspend` | `users:manage`. Active users only; takes effect on the user's next request |
@@ -171,7 +176,7 @@ Alerts are created by the evaluator from alert template assignments and alert ru
 | GET | `/users/{id}/audit?page=&page_size=` | `users:manage`. Audit entries about or by the user |
 
 All user changes enforce: no self-modification, no role above your own, no managing a higher-ranked user, at least one active Super Admin, and no edits to Entra-managed roles. Users are never deleted.
-| GET | `/audit-logs?action=&result=&page=&page_size=` | `audit:view` |
+| GET | `/audit-logs?action=&result=&page=&page_size=` | `audit:view` and access to all projects (`403 SCOPE_REQUIRED` otherwise) |
 
 ## Platform endpoints (outside `/api/v1`, unauthenticated)
 

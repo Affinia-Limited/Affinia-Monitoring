@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Project, Resource
+from app.models import Environment, Project, Resource
 from app.schemas.misc import ComparisonOut, ComparisonRow
 from app.services.azure.types import AzureServices, TimeRange
 from app.services.metric_service import MetricService, reduce_values
@@ -16,15 +16,23 @@ from app.services.relations import tenant_for_resource
 
 
 async def compare_environments(
-    db: AsyncSession, azure: AzureServices, project: Project, time_range: TimeRange
+    db: AsyncSession,
+    azure: AzureServices,
+    project: Project,
+    time_range: TimeRange,
+    *,
+    environments: list[Environment] | None = None,
+    resource_scope: ColumnElement[bool] | None = None,
 ) -> ComparisonOut:
-    envs = list(project.environments)
+    """``environments`` / ``resource_scope`` limit the comparison to what the caller may see."""
+    envs = list(project.environments) if environments is None else environments
     resources = list(
         await db.scalars(
             select(Resource).where(
                 Resource.project_id == project.id,
                 Resource.deleted_at.is_(None),
                 Resource.environment_id.in_([e.id for e in envs]),
+                resource_scope if resource_scope is not None else true(),
             )
         )
     )

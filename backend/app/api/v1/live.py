@@ -115,7 +115,11 @@ async def live_resources(
         list(
             await db.scalars(
                 select(Resource).where(
-                    Resource.organization_id == org, Resource.deleted_at.is_(None), Resource.id.in_(wanted)
+                    Resource.organization_id == org,
+                    Resource.deleted_at.is_(None),
+                    Resource.id.in_(wanted),
+                    # Only resources the caller may see; others are simply absent.
+                    user.access.resource_filter(),
                 )
             )
         )

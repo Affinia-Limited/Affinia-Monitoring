@@ -11,6 +11,7 @@ import { Input, Select } from "@/components/ui/form";
 import { ErrorState, LoadingBlock } from "@/components/ui/states";
 import { Table, TD, TH, THead, TR } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAccess } from "@/hooks/useAccess";
 import { PERMISSIONS, useMe, usePermission } from "@/hooks/useMe";
 import { type ThemePreference, useTheme } from "@/stores/theme";
 import { cn } from "@/utils/cn";
@@ -203,7 +204,9 @@ function AboutTab() {
 const SETTINGS_TABS = ["users", "thresholds", "audit", "appearance", "about"];
 
 export function SettingsPage() {
-  const canAudit = usePermission(PERMISSIONS.viewAudit);
+  // The organisation's audit log covers every project, so it needs access to all projects.
+  const { unrestricted } = useAccess();
+  const canAudit = usePermission(PERMISSIONS.viewAudit) && unrestricted;
   const [params, setParams] = useSearchParams();
   const requested = params.get("tab") ?? "users";
   const tab = SETTINGS_TABS.includes(requested) && (requested !== "audit" || canAudit) ? requested : "users";
