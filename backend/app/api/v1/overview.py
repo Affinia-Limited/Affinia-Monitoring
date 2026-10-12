@@ -13,6 +13,7 @@ from app.core.cache import cache_key, get_cache
 from app.core.errors import AppError
 from app.core.permissions import Permission
 from app.models import Alert, AzureConnection, Project, Resource, Subscription
+from app.services.health.evaluator import reason_text
 from app.services.monitors.registry import type_display_name
 from app.services.views import (
     ScopeHealth,
@@ -318,12 +319,4 @@ async def overview(db: DbSession, azure: Azure, user: Viewer) -> dict[str, Any]:
 
 
 def _reason_text(reason: dict[str, Any]) -> str:
-    if not reason:
-        return ""
-    if reason.get("signal") == "metric":
-        unit = {"percent": "%", "milliseconds": " ms"}.get(reason.get("unit") or "", "")
-        op = {"gt": "above", "gte": "at or above", "lt": "below", "lte": "at or below"}.get(
-            reason.get("operator", ""), ""
-        )
-        return f"{reason.get('label')} {reason.get('value'):g}{unit}, {op} {reason.get('threshold'):g}{unit}"
-    return str(reason.get("message") or "")
+    return reason_text(reason)

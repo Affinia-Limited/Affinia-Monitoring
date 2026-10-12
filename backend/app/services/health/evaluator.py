@@ -27,6 +27,8 @@ from app.core.errors import AppError
 from app.core.metrics import JOB_FAILURES, JOB_RUNS
 from app.db.session import session_scope
 from app.models import AzureConnection, HealthThreshold, Resource, Subscription
+from app.services.alerts.email_lists import HealthTransition
+from app.services.alerts.teams_alerts import notify_health_transitions
 from app.services.azure.provider import get_azure_services
 from app.services.azure.resource_health import health_from_availability
 from app.services.azure.types import AzureServices, TimeRange
@@ -57,6 +59,21 @@ def classify(value: float, rule: HealthRule, warning: float | None, critical: fl
     if breaches(value, rule.operator, warning):
         return "warning"
     return "healthy"
+
+
+def reason_text(reason: dict[str, Any] | None) -> str:
+    """One line for a health reason, e.g. "HTTP 5xx 64, above 50"."""
+    if not reason:
+        return ""
+    if reason.get("signal") == "metric" and reason.get("value") is not None:
+        unit = {"percent": "%", "milliseconds": " ms"}.get(reason.get("unit") or "", "")
+        op = {"gt": "above", "gte": "at or above", "lt": "below", "lte": "at or below"}.get(
+            reason.get("operator", ""), "past"
+        )
+        threshold = reason.get("threshold")
+        limit = f", {op} {threshold:g}{unit}" if threshold is not None else ""
+        return f"{reason.get('label')} {reason['value']:g}{unit}{limit}"
+    return str(reason.get("message") or "")
 
 
 def state_reasons(resource: Resource) -> list[dict[str, Any]]:
@@ -109,7 +126,10 @@ async def evaluate_resources(
     organization_id: uuid.UUID,
     connection_id: uuid.UUID | None = None,
     resource_ids: list[uuid.UUID] | None = None,
+    transitions: list[HealthTransition] | None = None,
 ) -> dict[str, int]:
+    """Evaluate and store health. Status changes are appended to ``transitions`` when given, for
+    notification after the caller commits; never-evaluated resources are skipped (first discovery)."""
     query = select(Resource).where(Resource.organization_id == organization_id, Resource.deleted_at.is_(None))
     if connection_id:
         query = query.where(Resource.connection_id == connection_id)
@@ -222,6 +242,11 @@ async def evaluate_resources(
             status = "healthy"
         else:
             status = "unknown"
+        if transitions is not None and resource.health_evaluated_at is not None and resource.health_status != status:
+            worst = max(reasons, key=lambda r: _RANK[r["severity"]]) if reasons else None
+            transitions.append(
+                HealthTransition(resource.id, resource.health_status, status, reason_text(worst) if worst else "")
+            )
         resource.health_status = status
         resource.health_reasons = reasons
         resource.health_metrics = readings
@@ -286,8 +311,12 @@ async def run_health_job(organization_id: str | None = None) -> None:
         for org_id in org_ids:
             # One organisation's failure (e.g. Azure unreachable for its tenant) must not stop the others.
             try:
+                transitions: list[HealthTransition] = []
                 async with session_scope() as db:
-                    await evaluate_resources(db, azure, org_id)
+                    await evaluate_resources(db, azure, org_id, transitions=transitions)
+                # Committed: now tell the email lists (never raises).
+                async with session_scope() as db:
+                    await notify_health_transitions(db, org_id, transitions)
                 async with session_scope() as db:
                     await evaluate_alert_rules(db, azure, org_id)
             except Exception:

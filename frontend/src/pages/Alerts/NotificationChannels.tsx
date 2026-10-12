@@ -16,7 +16,6 @@ const TYPES: { value: NotificationChannel["channel_type"]; label: string }[] = [
   { value: "teams", label: "Microsoft Teams" },
   { value: "slack", label: "Slack" },
   { value: "webhook", label: "Webhook" },
-  { value: "email", label: "Email (not yet available)" },
 ];
 
 function CreateChannelDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {

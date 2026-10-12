@@ -6,13 +6,16 @@ import { PERMISSIONS, usePermission } from "@/hooks/useMe";
 import { useFilters } from "@/stores/filters";
 import { AlertDetailDrawer } from "./AlertDetailDrawer";
 import { AlertRules } from "./AlertRules";
+import { AzureExportPanel } from "./AzureExportPanel";
+import { EmailNotifications } from "./EmailNotifications";
 import { NotificationChannels } from "./NotificationChannels";
+import { TeamsNotifications } from "./TeamsNotifications";
 
 export function AlertsPage() {
   const [params, setParams] = useSearchParams();
   const { projectId, environmentId } = useFilters();
   const canManage = usePermission(PERMISSIONS.manageAlerts);
-  const tab = ["rules", "channels"].includes(params.get("tab") ?? "") ? (params.get("tab") as string) : "alerts";
+  const tab = ["rules", "teams", "channels", "email", "export"].includes(params.get("tab") ?? "") ? (params.get("tab") as string) : "alerts";
   // ?alert=<id> (e.g. from global search) opens the alert drawer.
   const selected = params.get("alert");
   const setSelected = (id: string | null) =>
@@ -44,7 +47,10 @@ export function AlertsPage() {
         <TabsList aria-label="Alert views">
           <TabsTrigger value="alerts">Alerts</TabsTrigger>
           <TabsTrigger value="rules">Rules</TabsTrigger>
+          {canManage ? <TabsTrigger value="teams">Microsoft Teams</TabsTrigger> : null}
+          {canManage ? <TabsTrigger value="email">Email notifications</TabsTrigger> : null}
           {canManage ? <TabsTrigger value="channels">Notification channels</TabsTrigger> : null}
+          {canManage ? <TabsTrigger value="export">Export to Azure</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="alerts">
           <AlertsExplorer key={`${projectId}-${environmentId}`} showScopeFilters projectId={projectId} environmentId={environmentId} onSelect={(a) => setSelected(a.id)} />
@@ -53,8 +59,23 @@ export function AlertsPage() {
           <AlertRules />
         </TabsContent>
         {canManage ? (
+          <TabsContent value="teams">
+            <TeamsNotifications />
+          </TabsContent>
+        ) : null}
+        {canManage ? (
+          <TabsContent value="email">
+            <EmailNotifications />
+          </TabsContent>
+        ) : null}
+        {canManage ? (
           <TabsContent value="channels">
             <NotificationChannels />
+          </TabsContent>
+        ) : null}
+        {canManage ? (
+          <TabsContent value="export">
+            <AzureExportPanel />
           </TabsContent>
         ) : null}
       </Tabs>

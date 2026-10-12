@@ -29,6 +29,7 @@ One user-assigned managed identity for all containers
 | Identity | User-assigned managed identity: `AZURE_CLIENT_ID` is set on every container |
 | Database auth | `DATABASE_AUTH=entra`, with a password-less `DATABASE_URL` (`?ssl=require`). The backend obtains a token for `https://ossrdbms-aad.database.windows.net/.default` for each new connection |
 | Secrets | Only the Redis URL, as a Key Vault reference. No passwords, client secrets or connection strings in templates |
+| Email | `infra/modules/email.bicep` (when `enableEmail`, the default): an Email Communication Service with an Azure-managed domain, linked to a Communication Services resource. The identity gets Contributor on that resource only and sends with Entra authentication. The api and worker receive `EMAIL_PROVIDER=acs`, `ACS_EMAIL_ENDPOINT`, `EMAIL_SENDER_ADDRESS` and, with a custom domain, `PUBLIC_BASE_URL`. `emailDataLocation` (default `UK`) sets where email data is stored. See [monitoring.md](monitoring.md#email-notifications) |
 | Networking | Front Door is the only public entry to the app. The API, database, Redis and Key Vault are private. The Container Registry (Standard SKU) keeps public network access, protected by Entra authentication with the admin user disabled |
 | Monitored subscriptions | Grant the managed identity Reader, Monitoring Reader and Log Analytics Reader ([azure-rbac.md](azure-rbac.md)) |
 

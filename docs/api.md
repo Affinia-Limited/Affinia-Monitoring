@@ -136,6 +136,7 @@ Time-range parameters: `timeRange` = `30m`, `1h`, `6h`, `24h`, `7d`, `30d` or `c
 | POST | `/alert-rules` | `alerts:manage` |
 | PUT | `/alert-rules/{id}` | `alerts:manage` |
 | DELETE | `/alert-rules/{id}` | `alerts:manage` |
+| GET | `/alert-rules/azure-export?project_id=&environment_id=&resource_id=&include_health=&include_rules=&recipients=&action_group_name=` | `alerts:manage`. Azure Monitor metric alerts and an email action group as ARM templates, one per subscription, plus rules that could not be exported and why. See [azure-alert-export.md](azure-alert-export.md) |
 | GET | `/notification-channels` | `alerts:manage` |
 | POST | `/notification-channels` | `alerts:manage` |
 | DELETE | `/notification-channels/{id}` | `alerts:manage` |

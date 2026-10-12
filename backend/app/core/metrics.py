@@ -73,6 +73,8 @@ AZURE_FAILURES = Counter("amp_azure_failures_total", "Failed Azure API calls by 
 JOB_RUNS = Counter("amp_job_runs_total", "Background job executions by job", "job")
 JOB_FAILURES = Counter("amp_job_failures_total", "Failed background jobs by job", "job")
 SYNC_FAILURES = Counter("amp_sync_failures_total", "Failed synchronisations by error code", "code")
+EMAILS_SENT = Counter("amp_emails_sent_total", "Notification emails handed to the provider by kind", "kind")
+EMAIL_FAILURES = Counter("amp_email_failures_total", "Notification emails that could not be sent by kind", "kind")
 
 _ALL: list[Counter | Histogram] = [
     HTTP_REQUESTS,
@@ -82,6 +84,8 @@ _ALL: list[Counter | Histogram] = [
     JOB_RUNS,
     JOB_FAILURES,
     SYNC_FAILURES,
+    EMAILS_SENT,
+    EMAIL_FAILURES,
 ]
 
 

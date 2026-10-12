@@ -330,6 +330,32 @@ export interface NotificationChannel {
   created_at: string;
 }
 
+/** An email list: who is emailed about alerts and health changes in a scope. */
+export interface EmailList {
+  id: string;
+  name: string;
+  enabled: boolean;
+  recipients: string[];
+  /** "critical": critical only. "warning": critical and warning. */
+  min_severity: "critical" | "warning";
+  /** Also email when an alert resolves or a resource recovers. */
+  notify_resolved: boolean;
+  project_id: string | null;
+  environment_id: string | null;
+  project_name: string | null;
+  environment_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type EmailListIn = Pick<EmailList, "name" | "recipients" | "min_severity" | "notify_resolved" | "enabled" | "project_id" | "environment_id">;
+
+export interface EmailStatus {
+  /** acs | log | none */
+  provider: string;
+  configured: boolean;
+}
+
 export interface HealthRule {
   monitor_key: string;
   monitor_name: string;
@@ -704,4 +730,37 @@ export interface LiveResources {
   interval_seconds: number;
   /** Keyed by resource id; inventory items and unknown ids are absent. */
   resources: Record<string, LiveResourceState>;
+}
+
+/** A Microsoft Teams channel subscribed to alerts and health changes (like an email list). */
+export interface TeamsChannel {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Name of the Key Vault secret (or local SECRET_ variable) holding the Workflows webhook URL. */
+  secret_ref: string | null;
+  min_severity: "critical" | "warning";
+  notify_resolved: boolean;
+  project_id: string | null;
+  environment_id: string | null;
+  project_name: string | null;
+  environment_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamsChannelIn {
+  name: string;
+  secret_ref: string;
+  min_severity: "critical" | "warning";
+  notify_resolved: boolean;
+  enabled: boolean;
+  project_id: string | null;
+  environment_id: string | null;
+}
+
+export interface TeamsSetup {
+  /** Every Teams secret name must start with this. */
+  secret_prefix: string;
+  secret_source: "key_vault" | "environment" | "none";
 }

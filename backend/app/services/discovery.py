@@ -343,8 +343,12 @@ async def _upsert(
 
 
 async def execute_sync(db: AsyncSession, run: SyncRun, azure: AzureServices) -> None:
+    from app.services.alerts.email_lists import HealthTransition
+    from app.services.alerts.teams_alerts import notify_health_transitions
     from app.services.dashboards.generator import generate_dashboards
     from app.services.health.evaluator import evaluate_resources
+
+    transitions: list[HealthTransition] = []
 
     progress = SyncProgress(db, run)
     connection = await db.get(AzureConnection, run.connection_id)
@@ -408,7 +412,9 @@ async def execute_sync(db: AsyncSession, run: SyncRun, azure: AzureServices) -> 
         current = "health"
         await progress.start(current)
         try:
-            health = await evaluate_resources(db, azure, connection.organization_id, connection_id=connection.id)
+            health = await evaluate_resources(
+                db, azure, connection.organization_id, connection_id=connection.id, transitions=transitions
+            )
             await progress.finish(current, f"{health['evaluated']} resources evaluated")
         except AppError as exc:
             # Health can be retried by the scheduler; don't fail the whole sync.
@@ -443,6 +449,9 @@ async def execute_sync(db: AsyncSession, run: SyncRun, azure: AzureServices) -> 
         run.finished_at = now_utc()
         await db.commit()
         await get_cache().delete_prefix("amp:overview")
+    # Only a committed, successful sync's health changes are announced (a failed one was rolled back).
+    if run.status == "succeeded" and transitions:
+        await notify_health_transitions(db, connection.organization_id, transitions)
 
 
 async def run_sync_job(sync_run_id: str) -> None:

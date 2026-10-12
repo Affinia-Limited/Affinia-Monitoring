@@ -43,6 +43,12 @@ param bootstrapSuperAdminOids array = []
 @description('Optional custom domain for Front Door.')
 param customDomain string = ''
 
+@description('Send alert emails through Azure Communication Services (managed identity, Azure-managed sender domain).')
+param enableEmail bool = true
+
+@description('Where Azure Communication Services stores email data at rest, e.g. UK, Europe, United States.')
+param emailDataLocation string = 'UK'
+
 param tags object = {
   application: 'azure-monitoring-platform'
   managedBy: 'bicep'
@@ -112,6 +118,16 @@ module redis 'modules/redis.bicep' = {
   }
 }
 
+module email 'modules/email.bicep' = if (enableEmail) {
+  name: 'email'
+  params: {
+    namePrefix: namePrefix
+    tags: tags
+    dataLocation: emailDataLocation
+    senderPrincipalId: identity.outputs.principalId
+  }
+}
+
 module apps 'modules/containerapps.bicep' = if (deployApps) {
   name: 'containerapps'
   params: {
@@ -135,6 +151,10 @@ module apps 'modules/containerapps.bicep' = if (deployApps) {
     entraAudience: entraAudience
     bootstrapSuperAdminOids: bootstrapSuperAdminOids
     corsOrigins: empty(customDomain) ? [] : [ 'https://${customDomain}' ]
+    publicBaseUrl: empty(customDomain) ? '' : 'https://${customDomain}'
+    emailProvider: enableEmail ? 'acs' : 'none'
+    acsEmailEndpoint: enableEmail ? email!.outputs.endpoint : ''
+    emailSenderAddress: enableEmail ? email!.outputs.senderAddress : ''
   }
 }
 

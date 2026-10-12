@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    alert_export,
     alerts,
     auth,
     azure_connections,
@@ -27,5 +28,18 @@ _ERRORS = {
 }
 
 api_router = APIRouter(prefix="/api/v1", responses=_ERRORS)  # type: ignore[arg-type]
-for module in (auth, overview, live, projects, azure_connections, resources, dashboards, logs, alerts, search, users):
+for module in (
+    auth,
+    overview,
+    live,
+    projects,
+    azure_connections,
+    resources,
+    dashboards,
+    logs,
+    alert_export,
+    alerts,
+    search,
+    users,
+):
     api_router.include_router(module.router)

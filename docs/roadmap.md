@@ -31,7 +31,7 @@ Status as at 30/09/2026. "Implemented" means the feature is in code and covered 
 | Application Insights (requests, failures, dependencies, availability, traces, application map) | Implemented as a monitor plugin and through App Service related queries |
 | More resource types | 22 monitors implemented (see [dashboard-templates.md](dashboard-templates.md)) |
 | Microsoft Teams and Slack notifications | Implemented (Key Vault secret references) |
-| Email notifications | Placeholder; not implemented |
+| Email notifications | Implemented: email lists with recipients, severity and scope, via Azure Communication Services |
 | Environment comparison | Implemented |
 | Dashboard customisation | Implemented: in-app Customise mode, `PATCH`, reset to template |
 | Advanced alerts (multi-condition rules, dynamic thresholds, log-based alerts, importing Azure Monitor alerts, maintenance windows) | Not started |

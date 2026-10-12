@@ -133,6 +133,7 @@ Details are in [docs/security.md](docs/security.md).
 | [user-access-management.md](docs/user-access-management.md) | Admin-controlled access: first Super Admin, adding, suspending and removing users |
 | [azure-rbac.md](docs/azure-rbac.md) | Minimum Azure roles per capability and scope |
 | [monitoring.md](docs/monitoring.md) | Health, alerts, notifications, sync, caching, platform observability |
+| [azure-alert-export.md](docs/azure-alert-export.md) | Exporting alert rules as Azure Monitor ARM templates and deploying them |
 | [dashboard-templates.md](docs/dashboard-templates.md) | Template engine and widget reference |
 | [adding-resource-types.md](docs/adding-resource-types.md) | Writing a monitor plugin (worked example) |
 | [api.md](docs/api.md) | REST API reference with required permissions |

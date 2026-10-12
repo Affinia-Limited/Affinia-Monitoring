@@ -22,6 +22,8 @@ from app.models import (
 )
 from app.services.alerts.channels.base import AlertNotification, ChannelNotConfiguredError
 from app.services.alerts.channels.registry import get_sender
+from app.services.alerts.email_lists import EMAIL_CHANNEL, resource_link, send_alert_emails
+from app.services.alerts.teams_alerts import send_alert_teams
 from app.services.azure.types import AzureServices, TimeRange
 from app.services.health.evaluator import breaches
 from app.services.metric_service import MetricService, reduce_values
@@ -54,7 +56,16 @@ async def _matching_resources(db: AsyncSession, rule: AlertRule) -> list[Resourc
 
 
 async def notify(db: AsyncSession, alert: Alert, rule: AlertRule | None, event: str, resource: Resource) -> None:
-    channel_ids = [uuid.UUID(str(c)) for c in (rule.notification_channel_ids if rule else [])]
+    # Email lists are organisation-wide subscriptions: they receive every alert in their scope and
+    # severity, whether or not the rule names them (and are never emailed twice when it does).
+    await send_alert_emails(db, alert, event, resource)
+    # Subscribed Teams channels work the same way; their own settings decide, so skip them below.
+    handled = await send_alert_teams(db, alert, event, resource)
+    channel_ids = [
+        cid
+        for cid in (uuid.UUID(str(c)) for c in (rule.notification_channel_ids if rule else []))
+        if cid not in handled
+    ]
     if not channel_ids:
         return
     channels = list(
@@ -62,11 +73,14 @@ async def notify(db: AsyncSession, alert: Alert, rule: AlertRule | None, event: 
             select(NotificationChannel).where(
                 NotificationChannel.id.in_(channel_ids),
                 NotificationChannel.organization_id == alert.organization_id,
+                NotificationChannel.channel_type != EMAIL_CHANNEL,
                 NotificationChannel.enabled.is_(True),
                 NotificationChannel.deleted_at.is_(None),
             )
         )
     )
+    if not channels:
+        return
     project = await db.get(Project, resource.project_id) if resource.project_id else None
     environment = await db.get(Environment, resource.environment_id) if resource.environment_id else None
     notification = AlertNotification(
@@ -83,7 +97,7 @@ async def notify(db: AsyncSession, alert: Alert, rule: AlertRule | None, event: 
         current_value=alert.current_value,
         threshold=alert.threshold,
         started_at=alert.started_at.isoformat(),
-        link=None,
+        link=resource_link(resource.id),
     )
     for channel in channels:
         sender = get_sender(channel.channel_type)

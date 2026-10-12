@@ -95,7 +95,7 @@ Only platform-evaluated rules are supported. Alerts defined in Azure Monitor its
 | `webhook` | Implemented | JSON POST (`summary` plus alert fields) |
 | `teams` | Implemented | Adaptive Card POST to a Teams Workflows or incoming-webhook URL |
 | `slack` | Implemented | `{"text": ...}` POST to a Slack incoming webhook |
-| `email` | Placeholder | Always fails with "Email delivery is not configured in this deployment." |
+| `email` | Implemented as **email lists** (below) | Azure Communication Services Email |
 
 Endpoint URLs are secrets and are **not stored in the database**. A channel holds `secret_ref`, the name of a Key Vault secret whose value is the HTTPS URL. The URL is read with the managed identity at send time. Channel settings that look like URLs are rejected, and non-HTTPS endpoints are refused. The platform Key Vault is shared by every organisation, so **a channel's secret name must start with the organisation's slug and a hyphen**, for example `contoso-teams-ops` for the organisation `contoso`; other names are rejected when the channel is created. Delivery is refused for endpoints that resolve to loopback, private, link-local, reserved or multicast addresses. The channel test reports one generic failure message whatever went wrong (missing secret, non-HTTPS URL, refused address or HTTP error), so it cannot be used to probe Key Vault; the specific reason is in the API logs.
 
@@ -104,6 +104,52 @@ In development without Key Vault, the secret can come from an environment variab
 Delivery failures never stop evaluation. They are recorded as `notification_failed` events. `POST /api/v1/notification-channels/{id}/test` sends a test message.
 
 New channel types implement `NotificationSender` (`app/services/alerts/channels/base.py`) and are registered in `channels/registry.py`.
+
+## Microsoft Teams alerts
+
+**Alerts > Microsoft Teams** (needs `alerts:manage`) connects Teams channels that receive an Adaptive Card whenever something goes wrong. Each Teams channel has:
+
+- a webhook secret name (see [Notification channels](#notification-channels): the Teams workflow URL lives in Key Vault, or in `SECRET_<NAME>` locally; the URL is never stored or shown)
+- a severity: **Critical only** or **Critical and warning**
+- an optional scope: one project, or one environment of a project
+- whether to also post when an alert resolves or a resource recovers
+- an on/off switch
+
+Like email lists, a Teams channel receives **every** alert in its scope at or above its severity, whatever channels an alert rule names, plus resource health changes: into critical, into warning (for "Critical and warning"), and recovery. Health changes post only on a change of status, with a 30-minute cooldown per channel, resource and status. An alert rule that also names the channel does not post it twice. Teams channels created under **Notification channels** keep their original behaviour: they post only for the rules that name them.
+
+To connect a channel: in Teams, open the channel's **More options (...) > Workflows**, choose **Send webhook alerts to a channel**, add the workflow and copy its URL. Store the URL as a secret named `<org-slug>-...` (Key Vault in Azure; `SECRET_<NAME>` in `backend/.env.local` for local development), then add the channel with that name and use **Send test message**.
+
+API: `GET /api/v1/notifications/teams-setup` (secret prefix and where secrets are read from), and `GET`/`POST /api/v1/notifications/teams-channels`, `PATCH`/`DELETE .../{id}`. Test with `POST /api/v1/notification-channels/{id}/test`.
+
+## Email notifications
+
+Managed under **Alerts > Email notifications** (permission `alerts:manage`). An **email list** has a name, 1 to 50 recipients, a severity (**Critical only**, or **Critical and warning**), an optional project or environment scope, and whether to email recoveries.
+
+Email lists are organisation-wide subscriptions: unlike other channels, they do not need to be named on an alert rule. A list is emailed when, within its scope and severity:
+
+| Event | Email |
+| --- | --- |
+| An alert rule fires | `[CRITICAL]` / `[WARNING]` with the resource, metric, value, threshold and a link |
+| The alert resolves | `[RESOLVED]`, if the list emails recoveries |
+| A resource's health becomes critical | `[CRITICAL]` with the worst health reason |
+| A resource's health becomes warning (from healthy or not checked) | `[WARNING]`, for lists that include warnings |
+| A warning or critical resource becomes healthy again | `[RECOVERED]`, if the list emails recoveries |
+
+Health emails are sent only on **transitions** (never on every evaluation), only after the evaluation is saved, and at most once per list, resource and status every 30 minutes, so a flapping resource cannot flood inboxes. Resources evaluated for the first time (a new connection's first synchronisation) do not trigger emails; their state is on the dashboard. Each list receives **one message per event, with recipients in BCC**, so recipients do not see each other. Links point at the resource when `PUBLIC_BASE_URL` is set.
+
+Recipient addresses are personal data. Only `alerts:manage` can read them (the generic channel endpoints never return email lists), and audit entries and logs contain masked addresses only (`a***@contoso.com`). Alert history records which *list* was emailed, never addresses.
+
+### Delivery (`EMAIL_PROVIDER`)
+
+| Value | Behaviour |
+| --- | --- |
+| `acs` | Azure Communication Services Email, authenticated with the platform's managed identity (no keys or connection strings). Requires `ACS_EMAIL_ENDPOINT` (`https://<name>.communication.azure.com`) and `EMAIL_SENDER_ADDRESS` (a verified sender, e.g. `DoNotReply@<guid>.azurecomm.net`) |
+| `log` | Development and test only (refused elsewhere). Nothing is sent: a summary with masked recipients is logged, and the last 50 messages are kept in memory |
+| `none` (default) | Email is off. The Email notifications tab shows a banner, and a test email explains that delivery is not configured |
+
+The Bicep (`infra/modules/email.bicep`) creates an Email Communication Service with an Azure-managed domain, links it to a Communication Services resource and grants the app's managed identity **Contributor on that Communication Services resource only**. Contributor is the role Microsoft documents for sending email with Microsoft Entra authentication; a custom role limited to `Microsoft.Communication/CommunicationServices/Read` and `Microsoft.Communication/CommunicationServices/Write` on that resource can replace it. Azure-managed domains have low sending limits and a generic sender; for production volumes, add and verify your own domain, link it, and set `EMAIL_SENDER_ADDRESS` to an address on it.
+
+Send failures (provider errors, throttling, timeouts after 30 seconds) never stop evaluation: they are logged without addresses, counted in `amp_email_failures_total`, and recorded on the alert as `notification_failed`. Sent emails are counted in `amp_emails_sent_total`.
 
 ## Synchronisation and scheduling
 

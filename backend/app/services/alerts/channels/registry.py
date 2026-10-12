@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import ipaddress
 import logging
 from typing import Any, ClassVar
@@ -114,13 +115,31 @@ class SlackSender:
 
 
 class EmailSender:
-    """Placeholder until an email provider (e.g. Azure Communication Services) is chosen."""
+    """An email list (see ``app.services.alerts.email_lists``), delivered through ``app.services.email``."""
 
     channel_type: ClassVar[str] = "email"
     requires_secret: ClassVar[bool] = False
 
     async def send(self, channel: NotificationChannel, notification: AlertNotification) -> None:
-        raise ChannelNotConfiguredError("Email delivery is not configured in this deployment.")
+        from app.services.alerts.email_lists import EmailList
+        from app.services.email import EmailMessage, EmailNotConfiguredError, send_email
+
+        recipients = EmailList.from_channel(channel).recipients
+        if not recipients:
+            raise ChannelNotConfiguredError("This email list has no recipients.")
+        text = notification.summary() + (f"\n\n{notification.link}" if notification.link else "")
+        try:
+            await send_email(
+                EmailMessage(
+                    recipients=recipients,
+                    subject=notification.summary()[:250],
+                    text=text,
+                    html=f"<p>{html.escape(text)}</p>",
+                    kind="test" if notification.event == "test" else "alert",
+                )
+            )
+        except EmailNotConfiguredError as exc:
+            raise ChannelNotConfiguredError(str(exc)) from exc
 
 
 SENDERS: dict[str, NotificationSender] = {

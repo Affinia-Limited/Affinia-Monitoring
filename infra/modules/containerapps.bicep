@@ -20,6 +20,12 @@ param entraAudience string
 param bootstrapSuperAdminOids array = []
 param corsOrigins array = []
 param syncIntervalMinutes int = 15
+@description('Public URL of the web app, used for links in notification emails. Empty: no links.')
+param publicBaseUrl string = ''
+@allowed([ 'acs', 'none' ])
+param emailProvider string = 'none'
+param acsEmailEndpoint string = ''
+param emailSenderAddress string = ''
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
   name: logAnalyticsWorkspaceName
@@ -99,6 +105,11 @@ var sharedEnv = [
   { name: 'TRUSTED_PROXY_COUNT', value: '2' }
   { name: 'SYNC_INTERVAL_MINUTES', value: string(syncIntervalMinutes) }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
+  { name: 'PUBLIC_BASE_URL', value: publicBaseUrl }
+  // Email notifications: Azure Communication Services with the managed identity (no keys).
+  { name: 'EMAIL_PROVIDER', value: emailProvider }
+  { name: 'ACS_EMAIL_ENDPOINT', value: acsEmailEndpoint }
+  { name: 'EMAIL_SENDER_ADDRESS', value: emailSenderAddress }
 ]
 
 resource api 'Microsoft.App/containerApps@2024-03-01' = {

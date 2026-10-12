@@ -125,6 +125,17 @@ class Settings(BaseSettings):
     #: Hard cap on rows returned from a log query.
     log_query_max_rows: int = 5000
     trusted_proxy_count: int = 0
+    #: Public URL of the web app (e.g. ``https://monitor.contoso.com``), used for links in notifications.
+    public_base_url: str | None = None
+
+    # --- Email notifications ---
+    #: ``acs`` (Azure Communication Services Email, managed identity), ``log`` (development/test only:
+    #: logged and kept in memory, nothing is sent) or ``none`` (email notifications disabled).
+    email_provider: Literal["acs", "log", "none"] = "none"
+    #: ACS resource endpoint, e.g. ``https://<name>.communication.azure.com``.
+    acs_email_endpoint: str | None = None
+    #: Verified sender, e.g. ``DoNotReply@<guid>.azurecomm.net``.
+    email_sender_address: str | None = None
 
     @field_validator(
         "cors_origins",
@@ -180,6 +191,23 @@ class Settings(BaseSettings):
             raise ValueError("TASK_BACKEND=celery requires REDIS_URL outside development")
         if non_dev and self.database_auth == "password" and _DEFAULT_DB_CREDENTIALS in self.database_url:
             raise ValueError("DATABASE_URL still uses the default development credentials")
+        if non_dev and self.email_provider == "log":
+            raise ValueError("EMAIL_PROVIDER=log is only permitted when ENVIRONMENT is development or test")
+        if self.email_provider == "acs":
+            missing = [
+                name
+                for name, val in (
+                    ("ACS_EMAIL_ENDPOINT", self.acs_email_endpoint),
+                    ("EMAIL_SENDER_ADDRESS", self.email_sender_address),
+                )
+                if not val
+            ]
+            if missing:
+                raise ValueError(f"EMAIL_PROVIDER=acs requires: {', '.join(missing)}")
+            if not str(self.acs_email_endpoint).startswith("https://"):
+                raise ValueError("ACS_EMAIL_ENDPOINT must be an https:// URL")
+        if self.public_base_url and not self.public_base_url.startswith(("https://", "http://localhost")):
+            raise ValueError("PUBLIC_BASE_URL must be an https:// URL or http://localhost")
         if non_dev and "*" in self.cors_origins:
             raise ValueError("Wildcard CORS origins are not permitted outside development")
         return self

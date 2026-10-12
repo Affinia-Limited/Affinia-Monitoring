@@ -23,6 +23,8 @@ from app.schemas.resources import (
     ResourceFacets,
     ResourceOut,
 )
+from app.services.alerts.email_lists import HealthTransition
+from app.services.alerts.teams_alerts import notify_health_transitions
 from app.services.audit import record_audit
 from app.services.health.evaluator import evaluate_resources
 from app.services.metric_service import MetricService
@@ -337,8 +339,10 @@ async def assign_resource(
 @router.post("/{resource_id}/health/evaluate", response_model=ResourceOut)
 async def reevaluate_health(resource_id: uuid.UUID, db: DbSession, azure: Azure, user: Syncer) -> ResourceOut:
     resource = await _resource(db, user, resource_id)
-    await evaluate_resources(db, azure, user.organization_id, resource_ids=[resource.id])
+    transitions: list[HealthTransition] = []
+    await evaluate_resources(db, azure, user.organization_id, resource_ids=[resource.id], transitions=transitions)
     await db.commit()
+    await notify_health_transitions(db, user.organization_id, transitions)
     lookups = await load_lookups(db, user.organization_id, [resource])
     return resource_view(resource, lookups)
 

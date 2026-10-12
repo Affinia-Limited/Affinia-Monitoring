@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import func, or_, select
 
 from app.api.deps import CurrentUser, DbSession, require
+from app.core.config import Environment as AppEnvironment
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.core.permissions import Permission
 from app.models import (
@@ -29,14 +31,30 @@ from app.schemas.alerts import (
     AlertRuleOut,
     ChannelIn,
     ChannelOut,
+    EmailListIn,
+    EmailListOut,
+    EmailListUpdate,
+    EmailStatusOut,
     HealthRuleOut,
     HealthThresholdIn,
+    TeamsChannelIn,
+    TeamsChannelOut,
+    TeamsChannelUpdate,
+    TeamsSetupOut,
 )
 from app.schemas.common import Page
 from app.services.alerts.channels.base import AlertNotification
 from app.services.alerts.channels.registry import get_sender
+from app.services.alerts.email_lists import EMAIL_CHANNEL, EmailList, send_test_email
 from app.services.alerts.evaluator import resolve_open_alerts
+from app.services.alerts.teams_alerts import (
+    TEAMS_CHANNEL,
+    TeamsSubscription,
+    is_teams_subscription,
+    teams_config,
+)
 from app.services.audit import record_audit
+from app.services.email import email_status, mask_all
 from app.services.monitors.registry import all_monitors, get_monitor
 from app.services.views import alert_views
 
@@ -314,25 +332,39 @@ async def list_channels(db: DbSession, user: Manager) -> list[NotificationChanne
     return list(
         await db.scalars(
             select(NotificationChannel).where(
-                NotificationChannel.organization_id == user.organization_id, NotificationChannel.deleted_at.is_(None)
+                NotificationChannel.organization_id == user.organization_id,
+                NotificationChannel.deleted_at.is_(None),
+                # Email lists have their own endpoints (and their recipients their own access rules).
+                NotificationChannel.channel_type != EMAIL_CHANNEL,
             )
         )
     )
 
 
+async def _secret_prefix(db: DbSession, user: CurrentUser) -> str:
+    slug = await db.scalar(select(Organization.slug).where(Organization.id == user.organization_id))
+    return f"{slug}-"
+
+
+async def _check_secret_ref(db: DbSession, user: CurrentUser, secret_ref: str) -> None:
+    """Key Vault is shared by every organisation: a channel may only use this organisation's secrets."""
+    prefix = await _secret_prefix(db, user)
+    if not secret_ref.lower().startswith(prefix):
+        raise ValidationFailedError(
+            f"The Key Vault secret name must start with your organisation's prefix '{prefix}' "
+            f"(for example '{prefix}teams-ops')."
+        )
+
+
 @router.post("/notification-channels", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
 async def create_channel(body: ChannelIn, request: Request, db: DbSession, user: Manager) -> NotificationChannel:
+    if body.channel_type == EMAIL_CHANNEL:
+        raise ValidationFailedError("Create email notifications as an email list (Alerts > Email notifications).")
     sender = get_sender(body.channel_type)
     if sender and sender.requires_secret and not body.secret_ref:
         raise ValidationFailedError("This channel type requires a Key Vault secret reference.")
     if body.secret_ref:
-        # Key Vault is shared by every organisation: a channel may only use this organisation's secrets.
-        slug = await db.scalar(select(Organization.slug).where(Organization.id == user.organization_id))
-        if not body.secret_ref.lower().startswith(f"{slug}-"):
-            raise ValidationFailedError(
-                f"The Key Vault secret name must start with your organisation's prefix '{slug}-' "
-                f"(for example '{slug}-teams-ops')."
-            )
+        await _check_secret_ref(db, user, body.secret_ref)
     for value in body.config.values():
         for item in value if isinstance(value, list) else [value]:
             if "://" in item:
@@ -360,6 +392,7 @@ async def delete_channel(channel_id: uuid.UUID, request: Request, db: DbSession,
             NotificationChannel.id == channel_id,
             NotificationChannel.organization_id == user.organization_id,
             NotificationChannel.deleted_at.is_(None),
+            NotificationChannel.channel_type != EMAIL_CHANNEL,
         )
     )
     if channel is None:
@@ -431,6 +464,420 @@ async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, u
     )
     await db.commit()
     return outcome
+
+
+# ---- email lists -------------------------------------------------------------------------
+#
+# Recipients are personal data: only alerts:manage can read them, and audit entries and logs carry
+# masked addresses only (a***@contoso.com).
+
+
+@router.get("/notifications/email-status", response_model=EmailStatusOut)
+async def get_email_status(user: Viewer) -> dict[str, object]:
+    """Whether this deployment can send email (no endpoints or addresses)."""
+    return email_status()
+
+
+async def _email_list(db: DbSession, user: CurrentUser, list_id: uuid.UUID) -> NotificationChannel:
+    channel = await db.scalar(
+        select(NotificationChannel).where(
+            NotificationChannel.id == list_id,
+            NotificationChannel.organization_id == user.organization_id,
+            NotificationChannel.channel_type == EMAIL_CHANNEL,
+            NotificationChannel.deleted_at.is_(None),
+        )
+    )
+    if channel is None:
+        raise NotFoundError("Email list not found.")
+    return channel
+
+
+async def _validate_email_scope(
+    db: DbSession, user: CurrentUser, project_id: uuid.UUID | None, environment_id: uuid.UUID | None
+) -> None:
+    if environment_id and not project_id:
+        raise ValidationFailedError("Choose the project of the environment.")
+    if project_id:
+        found = await db.scalar(
+            select(Project.id).where(
+                Project.id == project_id, Project.organization_id == user.organization_id, Project.deleted_at.is_(None)
+            )
+        )
+        if found is None:
+            raise ValidationFailedError("The project was not found.")
+    if environment_id:
+        env = await db.scalar(
+            select(Environment).where(
+                Environment.id == environment_id,
+                Environment.organization_id == user.organization_id,
+                Environment.deleted_at.is_(None),
+            )
+        )
+        if env is None or env.project_id != project_id:
+            raise ValidationFailedError("The environment must belong to the chosen project.")
+
+
+async def _email_list_views(db: DbSession, channels: list[NotificationChannel]) -> list[EmailListOut]:
+    lists = [(c, EmailList.from_channel(c)) for c in channels]
+    project_ids = {lst.project_id for _, lst in lists if lst.project_id}
+    env_ids = {lst.environment_id for _, lst in lists if lst.environment_id}
+    projects = (
+        {p.id: p.name for p in await db.scalars(select(Project).where(Project.id.in_(project_ids)))}
+        if project_ids
+        else {}
+    )
+    envs = (
+        {e.id: e.name for e in await db.scalars(select(Environment).where(Environment.id.in_(env_ids)))}
+        if env_ids
+        else {}
+    )
+    return [
+        EmailListOut(
+            id=c.id,
+            name=c.name,
+            enabled=c.enabled,
+            recipients=list(lst.recipients),
+            min_severity="warning" if lst.min_severity == "warning" else "critical",
+            notify_resolved=lst.notify_resolved,
+            project_id=lst.project_id,
+            environment_id=lst.environment_id,
+            project_name=projects.get(lst.project_id) if lst.project_id else None,
+            environment_name=envs.get(lst.environment_id) if lst.environment_id else None,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c, lst in lists
+    ]
+
+
+def _email_config(
+    recipients: list[str],
+    min_severity: str,
+    notify_resolved: bool,
+    project_id: uuid.UUID | None,
+    environment_id: uuid.UUID | None,
+) -> dict[str, object]:
+    return {
+        "recipients": recipients,
+        "min_severity": min_severity,
+        "notify_resolved": notify_resolved,
+        "project_id": str(project_id) if project_id else None,
+        "environment_id": str(environment_id) if environment_id else None,
+    }
+
+
+def _audit_details(channel: NotificationChannel) -> dict[str, object]:
+    lst = EmailList.from_channel(channel)
+    return {
+        "name": channel.name,
+        "recipients": mask_all(lst.recipients),
+        "min_severity": lst.min_severity,
+        "notify_resolved": lst.notify_resolved,
+        "enabled": channel.enabled,
+        "project_id": str(lst.project_id) if lst.project_id else None,
+        "environment_id": str(lst.environment_id) if lst.environment_id else None,
+    }
+
+
+@router.get("/notifications/email-lists", response_model=list[EmailListOut])
+async def list_email_lists(db: DbSession, user: Manager) -> list[EmailListOut]:
+    channels = list(
+        await db.scalars(
+            select(NotificationChannel)
+            .where(
+                NotificationChannel.organization_id == user.organization_id,
+                NotificationChannel.channel_type == EMAIL_CHANNEL,
+                NotificationChannel.deleted_at.is_(None),
+            )
+            .order_by(NotificationChannel.name)
+        )
+    )
+    return await _email_list_views(db, channels)
+
+
+@router.post("/notifications/email-lists", response_model=EmailListOut, status_code=status.HTTP_201_CREATED)
+async def create_email_list(body: EmailListIn, request: Request, db: DbSession, user: Manager) -> EmailListOut:
+    await _validate_email_scope(db, user, body.project_id, body.environment_id)
+    channel = NotificationChannel(
+        organization_id=user.organization_id,
+        name=body.name,
+        channel_type=EMAIL_CHANNEL,
+        enabled=body.enabled,
+        config=_email_config(
+            body.recipients, body.min_severity, body.notify_resolved, body.project_id, body.environment_id
+        ),
+    )
+    db.add(channel)
+    await db.flush()
+    await record_audit(
+        db,
+        action="email_list.created",
+        user=user,
+        target_type="email_list",
+        target_id=str(channel.id),
+        request=request,
+        details=_audit_details(channel),
+    )
+    await db.commit()
+    await db.refresh(channel)
+    return (await _email_list_views(db, [channel]))[0]
+
+
+@router.patch("/notifications/email-lists/{list_id}", response_model=EmailListOut)
+async def update_email_list(
+    list_id: uuid.UUID, body: EmailListUpdate, request: Request, db: DbSession, user: Manager
+) -> EmailListOut:
+    channel = await _email_list(db, user, list_id)
+    current = EmailList.from_channel(channel)
+    changes = body.model_fields_set
+    project_id = body.project_id if "project_id" in changes else current.project_id
+    environment_id = body.environment_id if "environment_id" in changes else current.environment_id
+    if "project_id" in changes and "environment_id" not in changes and project_id != current.project_id:
+        environment_id = None  # a new project scope cannot keep the old project's environment
+    await _validate_email_scope(db, user, project_id, environment_id)
+    channel.config = _email_config(
+        body.recipients if body.recipients is not None else list(current.recipients),
+        body.min_severity or current.min_severity,
+        body.notify_resolved if body.notify_resolved is not None else current.notify_resolved,
+        project_id,
+        environment_id,
+    )
+    if body.name is not None:
+        channel.name = body.name.strip()
+    if body.enabled is not None:
+        channel.enabled = body.enabled
+    await record_audit(
+        db,
+        action="email_list.updated",
+        user=user,
+        target_type="email_list",
+        target_id=str(channel.id),
+        request=request,
+        details=_audit_details(channel),
+    )
+    await db.commit()
+    await db.refresh(channel)
+    return (await _email_list_views(db, [channel]))[0]
+
+
+@router.delete("/notifications/email-lists/{list_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
+    channel = await _email_list(db, user, list_id)
+    channel.deleted_at = datetime.now(UTC)
+    await record_audit(
+        db,
+        action="email_list.deleted",
+        user=user,
+        target_type="email_list",
+        target_id=str(channel.id),
+        request=request,
+        details={"name": channel.name},
+    )
+    await db.commit()
+
+
+@router.post("/notifications/email-lists/{list_id}/test", response_model=dict[str, str])
+async def test_email_list(list_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> dict[str, str]:
+    channel = await _email_list(db, user, list_id)
+    lst = EmailList.from_channel(channel)
+    problem = await send_test_email(lst)
+    outcome = (
+        {"status": "sent", "message": f"Test email sent to {len(lst.recipients)} recipient(s)."}
+        if problem is None
+        else {"status": "failed", "message": problem}
+    )
+    await record_audit(
+        db,
+        action="email_list.tested",
+        user=user,
+        target_type="email_list",
+        target_id=str(channel.id),
+        request=request,
+        result="success" if problem is None else "failure",
+        details={"recipients": mask_all(lst.recipients)},
+    )
+    await db.commit()
+    return outcome
+
+
+# ---- Microsoft Teams alert channels ---------------------------------------------------------
+#
+# The Workflows webhook URL is a secret: only its Key Vault secret name is stored and returned.
+
+
+@router.get("/notifications/teams-setup", response_model=TeamsSetupOut)
+async def get_teams_setup(db: DbSession, user: Manager) -> dict[str, str]:
+    settings = get_settings()
+    if settings.key_vault_url:
+        source = "key_vault"
+    elif settings.environment in (AppEnvironment.development, AppEnvironment.test):
+        source = "environment"
+    else:
+        source = "none"
+    return {"secret_prefix": await _secret_prefix(db, user), "secret_source": source}
+
+
+async def _teams_channel(db: DbSession, user: CurrentUser, channel_id: uuid.UUID) -> NotificationChannel:
+    channel = await db.scalar(
+        select(NotificationChannel).where(
+            NotificationChannel.id == channel_id,
+            NotificationChannel.organization_id == user.organization_id,
+            NotificationChannel.channel_type == TEAMS_CHANNEL,
+            NotificationChannel.deleted_at.is_(None),
+        )
+    )
+    if channel is None or not is_teams_subscription(channel):
+        raise NotFoundError("Teams channel not found.")
+    return channel
+
+
+async def _teams_views(db: DbSession, channels: list[NotificationChannel]) -> list[TeamsChannelOut]:
+    subs = [TeamsSubscription.from_channel(c) for c in channels]
+    project_ids = {s.project_id for s in subs if s.project_id}
+    env_ids = {s.environment_id for s in subs if s.environment_id}
+    projects = (
+        {p.id: p.name for p in await db.scalars(select(Project).where(Project.id.in_(project_ids)))}
+        if project_ids
+        else {}
+    )
+    envs = (
+        {e.id: e.name for e in await db.scalars(select(Environment).where(Environment.id.in_(env_ids)))}
+        if env_ids
+        else {}
+    )
+    return [
+        TeamsChannelOut(
+            id=s.channel.id,
+            name=s.channel.name,
+            enabled=s.channel.enabled,
+            secret_ref=s.channel.secret_ref,
+            min_severity="warning" if s.min_severity == "warning" else "critical",
+            notify_resolved=s.notify_resolved,
+            project_id=s.project_id,
+            environment_id=s.environment_id,
+            project_name=projects.get(s.project_id) if s.project_id else None,
+            environment_name=envs.get(s.environment_id) if s.environment_id else None,
+            created_at=s.channel.created_at,
+            updated_at=s.channel.updated_at,
+        )
+        for s in subs
+    ]
+
+
+def _teams_audit(channel: NotificationChannel) -> dict[str, object]:
+    sub = TeamsSubscription.from_channel(channel)
+    return {
+        "name": channel.name,
+        "secret_ref": channel.secret_ref,
+        "min_severity": sub.min_severity,
+        "notify_resolved": sub.notify_resolved,
+        "enabled": channel.enabled,
+        "project_id": str(sub.project_id) if sub.project_id else None,
+        "environment_id": str(sub.environment_id) if sub.environment_id else None,
+    }
+
+
+@router.get("/notifications/teams-channels", response_model=list[TeamsChannelOut])
+async def list_teams_channels(db: DbSession, user: Manager) -> list[TeamsChannelOut]:
+    channels = [
+        c
+        for c in await db.scalars(
+            select(NotificationChannel)
+            .where(
+                NotificationChannel.organization_id == user.organization_id,
+                NotificationChannel.channel_type == TEAMS_CHANNEL,
+                NotificationChannel.deleted_at.is_(None),
+            )
+            .order_by(NotificationChannel.name)
+        )
+        if is_teams_subscription(c)
+    ]
+    return await _teams_views(db, channels)
+
+
+@router.post("/notifications/teams-channels", response_model=TeamsChannelOut, status_code=status.HTTP_201_CREATED)
+async def create_teams_channel(body: TeamsChannelIn, request: Request, db: DbSession, user: Manager) -> TeamsChannelOut:
+    await _check_secret_ref(db, user, body.secret_ref)
+    await _validate_email_scope(db, user, body.project_id, body.environment_id)
+    channel = NotificationChannel(
+        organization_id=user.organization_id,
+        name=body.name,
+        channel_type=TEAMS_CHANNEL,
+        enabled=body.enabled,
+        secret_ref=body.secret_ref,
+        config=teams_config(body.min_severity, body.notify_resolved, body.project_id, body.environment_id),
+    )
+    db.add(channel)
+    await db.flush()
+    await record_audit(
+        db,
+        action="teams_channel.created",
+        user=user,
+        target_type="notification_channel",
+        target_id=str(channel.id),
+        request=request,
+        details=_teams_audit(channel),
+    )
+    await db.commit()
+    await db.refresh(channel)
+    return (await _teams_views(db, [channel]))[0]
+
+
+@router.patch("/notifications/teams-channels/{channel_id}", response_model=TeamsChannelOut)
+async def update_teams_channel(
+    channel_id: uuid.UUID, body: TeamsChannelUpdate, request: Request, db: DbSession, user: Manager
+) -> TeamsChannelOut:
+    channel = await _teams_channel(db, user, channel_id)
+    current = TeamsSubscription.from_channel(channel)
+    changes = body.model_fields_set
+    project_id = body.project_id if "project_id" in changes else current.project_id
+    environment_id = body.environment_id if "environment_id" in changes else current.environment_id
+    if "project_id" in changes and "environment_id" not in changes and project_id != current.project_id:
+        environment_id = None  # a new project scope cannot keep the old project's environment
+    await _validate_email_scope(db, user, project_id, environment_id)
+    if body.secret_ref is not None:
+        await _check_secret_ref(db, user, body.secret_ref)
+        channel.secret_ref = body.secret_ref
+    channel.config = teams_config(
+        body.min_severity or current.min_severity,
+        body.notify_resolved if body.notify_resolved is not None else current.notify_resolved,
+        project_id,
+        environment_id,
+    )
+    if body.name is not None:
+        channel.name = body.name.strip()
+    if body.enabled is not None:
+        channel.enabled = body.enabled
+    await record_audit(
+        db,
+        action="teams_channel.updated",
+        user=user,
+        target_type="notification_channel",
+        target_id=str(channel.id),
+        request=request,
+        details=_teams_audit(channel),
+    )
+    await db.commit()
+    await db.refresh(channel)
+    return (await _teams_views(db, [channel]))[0]
+
+
+@router.delete(
+    "/notifications/teams-channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
+)
+async def delete_teams_channel(channel_id: uuid.UUID, request: Request, db: DbSession, user: Manager) -> None:
+    channel = await _teams_channel(db, user, channel_id)
+    channel.deleted_at = datetime.now(UTC)
+    await record_audit(
+        db,
+        action="teams_channel.deleted",
+        user=user,
+        target_type="notification_channel",
+        target_id=str(channel.id),
+        request=request,
+        details={"name": channel.name},
+    )
+    await db.commit()
 
 
 # ---- health thresholds ----------------------------------------------------------------
