@@ -74,8 +74,8 @@ function SetupGuide({ setup }: { setup: TeamsSetup | undefined }) {
               Store the URL as a secret whose name starts with <Code>{setup?.secret_prefix ?? "<prefix>-"}</Code>, for example <Code>{example}</Code>:
               {setup?.secret_source === "environment" ? (
                 <span className="mt-1 block text-muted-foreground">
-                  Local development: add <Code>{`${secretEnvName(example)}="<the URL>"`}</Code> to <Code>backend/.env.local</Code> (never committed) and
-                  restart the backend.
+                  Add the line <Code>{`${secretEnvName(example)}=<the URL>`}</Code> (one line, no quotes) to the server&apos;s <Code>.env</Code> file
+                  next to <Code>docker-compose.yml</Code> (locally: <Code>backend/.env.local</Code>), then recreate the backend and worker containers.
                 </span>
               ) : setup?.secret_source === "key_vault" ? (
                 <span className="mt-1 block text-muted-foreground">Add it to the platform&apos;s Azure Key Vault with the URL as the secret value.</span>
@@ -179,7 +179,7 @@ function TeamsChannelDialog({
             error={secretError}
             hint={
               setup?.secret_source === "environment" && trimmed && !secretError
-                ? `Locally, the URL is read from ${secretEnvName(trimmed)} (backend/.env.local).`
+                ? `The URL is read from the ${secretEnvName(trimmed)} line in the server's .env file.`
                 : "The name of the secret that holds the Teams workflow URL. The URL itself is never stored here."
             }
           >

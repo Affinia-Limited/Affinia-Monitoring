@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     #: Other tenants the platform identity may request tokens for.
     azure_additionally_allowed_tenants: CsvList = Field(default_factory=list)
     key_vault_url: str | None = None
+    #: Read secrets (e.g. Teams webhook URLs) from ``SECRET_<NAME>`` environment variables when Key Vault is
+    #: not configured. Always on in development/test; elsewhere an explicit opt-in for self-hosted servers
+    #: that keep secrets in a protected .env file. Key Vault, when set, always takes precedence.
+    allow_env_secrets: bool = False
     #: Which Azure tenants' subscriptions each organisation may connect, keyed by the organisation's Entra
     #: tenant id, as JSON: ``{"<org-tenant-id>": ["<azure-tenant-id>", ...]}``. An organisation may always
     #: connect subscriptions whose home tenant is its own Entra tenant; anything else (e.g. customer tenants

@@ -58,7 +58,7 @@ describe("Microsoft Teams alerts", () => {
     await screen.findByText("No Teams channels yet");
     await userEvent.click(screen.getByRole("button", { name: /How to connect a Teams channel/ }));
     expect(screen.getByText(/Send webhook alerts to a channel/)).toBeInTheDocument();
-    expect(screen.getByText('SECRET_ORG_1_TEAMS_ALERTS="<the URL>"')).toBeInTheDocument();
+    expect(screen.getByText("SECRET_ORG_1_TEAMS_ALERTS=<the URL>")).toBeInTheDocument();
   });
 
   it("adds a channel with its secret name, never a URL", async () => {

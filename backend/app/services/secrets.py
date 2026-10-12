@@ -48,7 +48,9 @@ async def get_secret(name: str) -> str:
             if not secret.value:
                 raise SecretNotAvailableError()
             return secret.value
-    if settings.environment in (Environment.development, Environment.test):
+    # Without Key Vault: SECRET_<NAME> variables, in development/test or when explicitly allowed
+    # (e.g. a self-hosted server keeping secrets in its protected .env file).
+    if settings.allow_env_secrets or settings.environment in (Environment.development, Environment.test):
         value = os.environ.get(f"SECRET_{name.upper().replace('-', '_')}")
         if value:
             return value

@@ -222,3 +222,26 @@ async def test_critical_only_channels_ignore_warnings(client: httpx.AsyncClient,
     plan = await find_resource(client, "asp-prism-prod-uks")
     await _reevaluate(org, plan["id"], status_before="healthy")
     assert posts == []
+
+
+async def test_production_reads_env_secrets_only_when_allowed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Self-hosted servers without Key Vault can opt in to SECRET_ variables in production."""
+    from app.core.config import Environment, get_settings
+    from app.services.secrets import SecretNotAvailableError, get_secret
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", Environment.production)
+    monkeypatch.setattr(settings, "key_vault_url", None)
+    monkeypatch.setenv("SECRET_ORG_0_TEAMS_ALERTS", WEBHOOK)
+
+    with pytest.raises(SecretNotAvailableError):
+        await get_secret(SECRET)
+    setup = (await client.get("/api/v1/notifications/teams-setup", headers=ADMIN)).json()
+    assert setup["secret_source"] == "none"
+
+    monkeypatch.setattr(settings, "allow_env_secrets", True)
+    assert await get_secret(SECRET) == WEBHOOK
+    setup = (await client.get("/api/v1/notifications/teams-setup", headers=ADMIN)).json()
+    assert setup["secret_source"] == "environment"

@@ -449,8 +449,9 @@ async def test_channel(channel_id: uuid.UUID, request: Request, db: DbSession, u
         message = (
             str(exc)
             if isinstance(exc, ChannelNotConfiguredError)
-            else "Delivery failed. Check that the Key Vault secret exists and holds the endpoint's public "
-            "https:// URL, and that the endpoint accepts the request."
+            else "Delivery failed. Check that the channel's secret (in Key Vault, or a SECRET_ variable in the "
+            "server's .env) exists and holds the endpoint's public https:// URL, and that the endpoint accepts "
+            "the request. On the server, run: python -m app.tools.check_teams"
         )
         outcome = {"status": "failed", "message": message}
     await record_audit(
@@ -710,7 +711,7 @@ async def get_teams_setup(db: DbSession, user: Manager) -> dict[str, str]:
     settings = get_settings()
     if settings.key_vault_url:
         source = "key_vault"
-    elif settings.environment in (AppEnvironment.development, AppEnvironment.test):
+    elif settings.allow_env_secrets or settings.environment in (AppEnvironment.development, AppEnvironment.test):
         source = "environment"
     else:
         source = "none"
