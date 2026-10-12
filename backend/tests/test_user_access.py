@@ -547,3 +547,57 @@ def test_insecure_configuration_is_refused(monkeypatch: pytest.MonkeyPatch, env:
         monkeypatch.setenv(key, value)
     with pytest.raises(ValueError, match=message):
         Settings()
+
+
+# ---------------------------------------------------------------- deleting revoked users
+
+
+async def test_revoked_user_can_be_deleted_and_personal_data_is_erased(client: httpx.AsyncClient) -> None:
+    from sqlalchemy import select
+
+    from app.db.session import session_scope
+    from app.models import AuditLog, User, UserAccessGrant
+
+    user_id = await add_member("leaver-oid", role="viewer", email="leaver@example.test")
+    headers = _token("leaver-oid", email="leaver@example.test")
+    assert (await client.get("/api/v1/projects", headers=headers)).status_code == 200  # audit trail as actor
+
+    # An active user cannot be deleted: revoke first.
+    refused = await client.delete(f"/api/v1/users/{user_id}", headers=SA)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "USER_NOT_REVOKED"
+    assert (await client.post(f"/api/v1/users/{user_id}/deactivate", headers=SA)).status_code == 200
+
+    assert (await client.delete(f"/api/v1/users/{user_id}", headers=SA)).status_code == 204
+    assert (await client.get(f"/api/v1/users/{user_id}", headers=SA)).status_code == 404
+    listed = (await client.get("/api/v1/users", params={"q": "leaver"}, headers=SA)).json()
+    assert listed["items"] == []
+
+    async with session_scope() as db:
+        row = await db.scalar(select(User).where(User.id == user_id))
+        assert row is not None and row.deleted_at is not None
+        assert (row.email, row.entra_object_id, row.display_name) == (None, None, "Deleted user")
+        assert list(await db.scalars(select(UserAccessGrant).where(UserAccessGrant.user_id == user_id))) == []
+        trail = list(await db.scalars(select(AuditLog)))
+        # The history is kept, without the address.
+        assert any(e.action == "user.deleted" and e.target_id == str(user_id) for e in trail)
+        assert not any("leaver@example.test" in (e.actor + str(e.details)) for e in trail)
+
+    # The account is unknown now, and the address can be invited again as a new user.
+    assert (await client.get("/api/v1/projects", headers=headers)).status_code == 403
+    again = await client.post(
+        "/api/v1/users/invite",
+        json={"email": "leaver@example.test", "role_key": "viewer", "grants": [{"project_id": None}]},
+        headers=SA,
+    )
+    assert again.status_code == 201 and again.json()["id"] != str(user_id)
+
+
+async def test_delete_follows_the_management_rules(client: httpx.AsyncClient) -> None:
+    me = (await client.get("/api/v1/auth/me", headers=SA)).json()
+    assert (await client.delete(f"/api/v1/users/{me['id']}", headers=SA)).status_code in (404, 422)
+    other_sa = await add_member("other-sa-del", role="super_admin")
+    assert (await client.post(f"/api/v1/users/{other_sa}/deactivate", headers=SA)).status_code == 200
+    # An admin cannot delete someone ranked above them, and viewers cannot delete anyone.
+    assert (await client.delete(f"/api/v1/users/{other_sa}", headers=auth_headers("admin"))).status_code in (403, 404)
+    assert (await client.delete(f"/api/v1/users/{other_sa}", headers=auth_headers("viewer"))).status_code == 403
+    assert (await client.delete(f"/api/v1/users/{other_sa}", headers=SA)).status_code == 204

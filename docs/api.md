@@ -175,7 +175,7 @@ Alerts are created by the evaluator from alert template assignments and alert ru
 | POST | `/users/{id}/deactivate` | `users:manage`. Removes access or revokes an invitation. The row and history are kept |
 | GET | `/users/{id}/audit?page=&page_size=` | `users:manage`. Audit entries about or by the user |
 
-All user changes enforce: no self-modification, no role above your own, no managing a higher-ranked user, at least one active Super Admin, and no edits to Entra-managed roles. Users are never deleted.
+All user changes enforce: no self-modification, no role above your own, no managing a higher-ranked user, at least one active Super Admin, and no edits to Entra-managed roles. `DELETE /users/{id}` removes a user only after their access is revoked (deactivated): personal data and access grants are erased, and the audit history is kept with the user shown as "Deleted user".
 | GET | `/audit-logs?action=&result=&page=&page_size=` | `audit:view` and access to all projects (`403 SCOPE_REQUIRED` otherwise) |
 
 ## Platform endpoints (outside `/api/v1`, unauthenticated)

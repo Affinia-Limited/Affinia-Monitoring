@@ -22,6 +22,7 @@ import {
   AddUserDialog,
   availableActions,
   ChangeRoleDialog,
+  DeleteUserDialog,
   EditAccessDialog,
   ROLE_LABELS,
   ROLES,
@@ -44,10 +45,11 @@ export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefine
   const [status, setStatus] = useState<UserStatusAction | null>(null);
   const [roleOpen, setRoleOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const actions = availableActions(user, me);
   const name = userName(user);
   if (actions.self) return <span className="text-xs text-muted-foreground">You</span>;
-  const any = actions.changeRole || actions.editAccess || actions.suspend || actions.reactivate || actions.deactivate;
+  const any = actions.changeRole || actions.editAccess || actions.suspend || actions.reactivate || actions.deactivate || actions.delete;
   return (
     <>
       <DropdownMenu>
@@ -62,7 +64,7 @@ export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefine
           </DropdownMenuItem>
           {actions.changeRole ? <DropdownMenuItem onSelect={() => setRoleOpen(true)}>Change role</DropdownMenuItem> : null}
           {actions.editAccess ? <DropdownMenuItem onSelect={() => setAccessOpen(true)}>Edit access</DropdownMenuItem> : null}
-          {actions.suspend || actions.reactivate || actions.deactivate ? <DropdownMenuSeparator /> : null}
+          {actions.suspend || actions.reactivate || actions.deactivate || actions.delete ? <DropdownMenuSeparator /> : null}
           {actions.reactivate ? <DropdownMenuItem onSelect={() => setStatus("reactivate")}>Reactivate</DropdownMenuItem> : null}
           {actions.suspend ? <DropdownMenuItem onSelect={() => setStatus("suspend")}>Suspend</DropdownMenuItem> : null}
           {actions.deactivate ? (
@@ -70,11 +72,17 @@ export function UserActionsMenu({ user, me }: { user: UserOut; me: Me | undefine
               {user.status === "pending" ? "Revoke invitation" : "Deactivate"}
             </DropdownMenuItem>
           ) : null}
+          {actions.delete ? (
+            <DropdownMenuItem className="text-critical" onSelect={() => setDeleteOpen(true)}>
+              Delete user
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
       <StatusActionDialog user={user} action={status} onClose={() => setStatus(null)} />
       {roleOpen ? <ChangeRoleDialog user={user} me={me} open={roleOpen} onClose={() => setRoleOpen(false)} /> : null}
       {accessOpen ? <EditAccessDialog user={user} open={accessOpen} onClose={() => setAccessOpen(false)} /> : null}
+      {deleteOpen ? <DeleteUserDialog user={user} open={deleteOpen} onClose={() => setDeleteOpen(false)} /> : null}
     </>
   );
 }

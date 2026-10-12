@@ -8,7 +8,8 @@ All rules are enforced here (not in the UI):
 * a manager sees and manages only members whose access (projects, environments, resources)
   lies inside their own, and can only grant access they have themselves;
 * the organisation always keeps at least one active Super Admin;
-* access is removed by suspension or deactivation, never by deleting the row.
+* access is removed by suspension or deactivation; a deactivated (revoked) user can then be
+  deleted: their personal data is erased and the row is kept, so the audit history stays intact.
 """
 
 from __future__ import annotations
@@ -18,16 +19,17 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from fastapi import Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationFailedError
 from app.core.permissions import Role, role_rank
-from app.models import Organization, User, UserStatus
+from app.models import AuditLog, Organization, User, UserAccessGrant, UserStatus
 from app.schemas.misc import AccessGrantIn
 from app.services.access_grants import GrantKey, can_manage_access, replace_grants, validate_grants
 from app.services.audit import record_audit
 from app.services.authentication.users import count_active_super_admins, normalise_email
+from app.services.email import mask_email
 
 if TYPE_CHECKING:
     from app.api.deps import CurrentUser
@@ -270,3 +272,54 @@ async def change_status(db: AsyncSession, actor: CurrentUser, target: User, acti
         details={"from": previous, "to": target.status},
     )
     return target
+
+
+#: Shown wherever a deleted user is referenced (e.g. "Invited by").
+DELETED_USER_NAME = "Deleted user"
+
+
+async def delete_user(db: AsyncSession, actor: CurrentUser, target: User, request: Request) -> None:
+    """Delete a revoked user: erase their personal data and access, keep the audit history.
+
+    Only deactivated users (including revoked invitations) can be deleted, so an active account is
+    never removed by accident. The row is soft-deleted rather than dropped: audit entries keep
+    pointing at it and read "Deleted user". If the same Microsoft account signs in again it is
+    unknown (access is refused), and the email address can be invited again as a new user.
+    """
+    if target.id == actor.id:
+        raise ValidationFailedError("You cannot delete your own account.")
+    _check_can_manage(actor, target)
+    if target.status != UserStatus.deactivated.value:
+        raise ConflictError("Revoke this user's access before deleting them.", code="USER_NOT_REVOKED")
+    masked = mask_email(target.email) if target.email else None
+    pseudonym = f"deleted-user-{str(target.id)[:8]}"
+    await record_audit(
+        db,
+        action="user.deleted",
+        user=actor,
+        target_type="user",
+        target_id=str(target.id),
+        request=request,
+        details={"email": masked, "role": target.role_key},
+    )
+    # Data minimisation: erase identifying data, here and in the audit trail, keep the events.
+    await db.execute(update(AuditLog).where(AuditLog.user_id == target.id).values(actor=pseudonym))
+    entries = await db.scalars(
+        select(AuditLog).where(
+            AuditLog.organization_id == target.organization_id,
+            AuditLog.target_type == "user",
+            AuditLog.target_id == str(target.id),
+        )
+    )
+    for entry in entries:
+        if isinstance(entry.details, dict) and entry.details.get("email") and entry.details["email"] != masked:
+            entry.details = {**entry.details, "email": masked}
+    for grant in await db.scalars(select(UserAccessGrant).where(UserAccessGrant.user_id == target.id)):
+        await db.delete(grant)
+    target.email = None
+    target.display_name = DELETED_USER_NAME
+    target.first_name = None
+    target.last_name = None
+    target.entra_object_id = None
+    target.invitation_expires_at = None
+    target.deleted_at = datetime.now(UTC)

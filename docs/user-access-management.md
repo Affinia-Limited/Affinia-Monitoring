@@ -90,7 +90,9 @@ User actions menu > **Suspend**, or `POST /api/v1/users/{id}/suspend`. This appl
 
 ## 7. Deactivating a user (removing access)
 
-**Deactivate**, or `POST /users/{id}/deactivate`, removes access permanently until an administrator reactivates the user. For a pending invitation, the menu shows **Revoke invitation**. Users are **never deleted**. The row, the `deactivated_at` timestamp and all audit entries are kept, so the audit trail stays intact. There is no hard-delete endpoint.
+**Deactivate**, or `POST /users/{id}/deactivate`, removes access permanently until an administrator reactivates the user. For a pending invitation, the menu shows **Revoke invitation**. The row, the `deactivated_at` timestamp and all audit entries are kept, so the user can be reactivated later.
+
+**Delete user**, or `DELETE /users/{id}`, is offered only after access is revoked (deactivated), so an active account is never removed by accident. It erases the user's name, email address, Entra object ID and access grants, and pseudonymises the email in their audit entries (`deleted-user-<id>` as actor, masked addresses in details). The audit events are kept and show the person as "Deleted user". If the same Microsoft account signs in again it is unknown and refused; the email address can be invited again as a new user. The usual rules apply: nobody can delete themselves, and administrators can delete only users they may manage.
 
 ## 8. Roles
 

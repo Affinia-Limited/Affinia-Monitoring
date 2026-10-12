@@ -148,6 +148,31 @@ describe("Users page", () => {
     expect(screen.queryByRole("menuitem", { name: "Suspend" })).not.toBeInTheDocument();
   });
 
+  it("deletes a user only after their access is revoked", async () => {
+    const leaver = user({ id: "u4", display_name: "Leaver", email: "leaver@example.test", status: "deactivated", deactivated_at: "2026-10-10T10:00:00Z" });
+    const deleted: string[] = [];
+    server.use(
+      listHandler([self, john, leaver]),
+      http.delete("*/api/v1/users/:id", ({ params }) => {
+        deleted.push(String(params.id));
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderWithProviders(<UsersPage />);
+    // Active users cannot be deleted directly.
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for John" }));
+    expect(screen.queryByRole("menuitem", { name: "Delete user" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Leaver" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete user" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/audit history is kept/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
+    await waitFor(() => expect(deleted).toEqual(["u4"]));
+    expect(await screen.findByText("Leaver deleted")).toBeInTheDocument();
+  });
+
   it("changes a user's role", async () => {
     let body: Record<string, unknown> | null = null;
     server.use(

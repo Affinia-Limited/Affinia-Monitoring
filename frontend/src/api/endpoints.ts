@@ -181,6 +181,8 @@ export const endpoints = {
   updateUser: (id: string, body: { role_key?: RoleKey; display_name?: string }) =>
     send<UserDetail>("patch", `/users/${id}`, body),
   setUserStatus: (id: string, action: UserStatusAction) => send<UserDetail>("post", `/users/${id}/${action}`),
+  /** Only for revoked (deactivated) users: erases personal data and access, keeps the audit history. */
+  deleteUser: (id: string) => send<void>("delete", `/users/${id}`),
   roles: () => get<RoleOut[]>("/roles"),
   auditLogs: (params: Params) => get<Page<AuditEntry>>("/audit-logs", params),
 };

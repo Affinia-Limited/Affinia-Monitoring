@@ -257,6 +257,14 @@ async def reactivate_user(user_id: uuid.UUID, request: Request, db: DbSession, u
     return await _transition(user_id, "reactivate", request, db, user)
 
 
+@router.delete("/users/{user_id}", status_code=204, response_model=None)
+async def delete_user(user_id: uuid.UUID, request: Request, db: DbSession, user: UserManager) -> None:
+    """Deletes a revoked (deactivated) user: personal data and access are erased, audit history is kept."""
+    target = await user_management.get_member(db, user, user_id)
+    await user_management.delete_user(db, user, target, request)
+    await db.commit()
+
+
 @router.post("/users/{user_id}/deactivate", response_model=UserDetailOut)
 async def deactivate_user(user_id: uuid.UUID, request: Request, db: DbSession, user: UserManager) -> UserOut:
     """Removes access (or revokes a pending invitation). The user row and audit history are kept."""

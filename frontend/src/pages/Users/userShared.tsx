@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { endpoints, type UserStatusAction } from "@/api/endpoints";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,8 @@ export function availableActions(user: UserOut, me: Me | undefined) {
     suspend: manageable && user.status === "active",
     reactivate: manageable && (user.status === "suspended" || user.status === "deactivated"),
     deactivate: manageable && user.status !== "deactivated",
+    // Deleting needs the user's access revoked first, so an active account is never removed by accident.
+    delete: manageable && user.status === "deactivated",
   };
 }
 
@@ -365,6 +368,51 @@ export function EditAccessDialog({ user, open, onClose }: { user: UserOut; open:
       >
         <AccessEditor value={access} onChange={setAccess} isSuperAdmin={isSuperAdmin} error={attempted ? accessError : null} />
         {mutation.isError ? <ErrorState error={mutation.error} className="mt-3" /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Permanently removes a revoked user: their name, email and sign-in link are erased; the audit history is kept. */
+export function DeleteUserDialog({ user, open, onClose }: { user: UserOut; open: boolean; onClose: () => void }) {
+  const invalidate = useInvalidateUsers();
+  const { notify } = useToast();
+  const navigate = useNavigate();
+  const name = userName(user);
+  const mutation = useMutation({
+    mutationFn: () => endpoints.deleteUser(user.id),
+    onSuccess: async () => {
+      notify({ tone: "success", title: `${name} deleted` });
+      await invalidate(user.id);
+      onClose();
+      navigate("/settings/users");
+    },
+  });
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !mutation.isPending) {
+          mutation.reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent
+        title="Delete user"
+        description={`${name} will be removed permanently. Their name, email address and Microsoft sign-in link are erased, and they no longer appear in the user list. The audit history is kept and shows them as "Deleted user". You can invite the same email address again later as a new user.`}
+        footer={
+          <>
+            <Button variant="ghost" disabled={mutation.isPending} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+              {mutation.isPending ? "Deleting..." : "Delete user"}
+            </Button>
+          </>
+        }
+      >
+        {mutation.isError ? <ErrorState error={mutation.error} compact /> : <p className="text-sm text-muted-foreground">This cannot be undone.</p>}
       </DialogContent>
     </Dialog>
   );
