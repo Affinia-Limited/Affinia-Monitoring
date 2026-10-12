@@ -245,3 +245,24 @@ async def test_production_reads_env_secrets_only_when_allowed(
     assert await get_secret(SECRET) == WEBHOOK
     setup = (await client.get("/api/v1/notifications/teams-setup", headers=ADMIN)).json()
     assert setup["secret_source"] == "environment"
+
+
+async def test_evaluate_now_runs_rules_and_is_throttled(client: httpx.AsyncClient, posts: list[dict[str, Any]]) -> None:
+    from app.services.jobs import wait_for_inline_jobs
+
+    await seeded(client)
+    await _channel(client)
+    app = await find_resource(client, "app-crm-prod-uks")
+    await _rule(client, name="Single app CPU", resource_id=app["id"])
+
+    started = await client.post("/api/v1/alert-rules/evaluate", headers=ADMIN)
+    assert started.status_code == 202, started.text
+    await wait_for_inline_jobs()
+    alerts = (await client.get("/api/v1/alerts", params={"status": "open"}, headers=ADMIN)).json()["items"]
+    # Only the one app the rule is scoped to.
+    assert {a["resource_name"] for a in alerts if a["title"].startswith("Plan CPU > 1")} == {"app-crm-prod-uks"}
+    assert any("Plan CPU > 1 on app-crm-prod-uks" in _summary(c) for c in posts)
+
+    again = await client.post("/api/v1/alert-rules/evaluate", headers=ADMIN)
+    assert again.status_code == 409 and again.json()["error"]["code"] == "EVALUATION_THROTTLED"
+    assert (await client.post("/api/v1/alert-rules/evaluate", headers=auth_headers("viewer"))).status_code == 403

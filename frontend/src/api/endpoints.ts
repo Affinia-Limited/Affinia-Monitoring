@@ -104,6 +104,8 @@ export const endpoints = {
   createAlertRule: (body: AlertRuleIn) => send<AlertRule>("post", "/alert-rules", body),
   updateAlertRule: (id: string, body: AlertRuleIn) => send<AlertRule>("put", `/alert-rules/${id}`, body),
   deleteAlertRule: (id: string) => send<void>("delete", `/alert-rules/${id}`),
+  /** Run health and alert-rule evaluation now (at most once a minute). */
+  evaluateAlertRules: () => send<{ status: string; message: string }>("post", "/alert-rules/evaluate"),
   channels: () => get<NotificationChannel[]>("/notification-channels"),
   createChannel: (body: Omit<NotificationChannel, "id" | "created_at">) =>
     send<NotificationChannel>("post", "/notification-channels", body),

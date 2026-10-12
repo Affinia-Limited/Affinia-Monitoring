@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import func, or_, select
 
 from app.api.deps import CurrentUser, DbSession, require
+from app.core.cache import get_cache
 from app.core.config import Environment as AppEnvironment
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
@@ -55,6 +56,7 @@ from app.services.alerts.teams_alerts import (
 )
 from app.services.audit import record_audit
 from app.services.email import email_status, mask_all
+from app.services.jobs import enqueue_health
 from app.services.monitors.registry import all_monitors, get_monitor
 from app.services.views import alert_views
 
@@ -251,6 +253,36 @@ async def list_rules(db: DbSession, user: Viewer) -> list[AlertRule]:
             .order_by(AlertRule.name)
         )
     )
+
+
+#: An on-demand evaluation runs the whole organisation's health and alert rules; once a minute is plenty.
+EVALUATE_COOLDOWN_SECONDS = 60
+
+
+@router.post("/alert-rules/evaluate", response_model=dict[str, str], status_code=status.HTTP_202_ACCEPTED)
+async def evaluate_now(request: Request, db: DbSession, user: Manager) -> dict[str, str]:
+    """Run health and alert-rule evaluation now (normally every HEALTH_INTERVAL_MINUTES).
+
+    Notifications (Teams, email) are sent as usual. Runs in the background; results appear on the
+    Alerts tab within a minute.
+    """
+    started = await get_cache().incr(f"amp:evaluate-now:{user.organization_id}", EVALUATE_COOLDOWN_SECONDS)
+    if started > 1:
+        raise ConflictError(
+            "An evaluation was started less than a minute ago. Wait a moment, then check the Alerts tab.",
+            code="EVALUATION_THROTTLED",
+        )
+    await record_audit(
+        db,
+        action="alert_rules.evaluated",
+        user=user,
+        target_type="organization",
+        target_id=str(user.organization_id),
+        request=request,
+    )
+    await db.commit()
+    enqueue_health(str(user.organization_id))
+    return {"status": "started", "message": "Evaluation started. New alerts appear on the Alerts tab within a minute."}
 
 
 @router.post("/alert-rules", response_model=AlertRuleOut, status_code=status.HTTP_201_CREATED)
