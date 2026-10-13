@@ -232,7 +232,7 @@ export function EnvironmentPage() {
             title="Environment not found"
             description="It may have been removed from this project."
             action={
-              <Link className="text-primary hover:underline" to={paths.project(project.id)}>
+              <Link className="text-link hover:underline" to={paths.project(project.id)}>
                 Back to {project.name}
               </Link>
             }

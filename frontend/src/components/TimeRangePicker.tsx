@@ -25,7 +25,7 @@ export function TimeRangePicker() {
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" aria-label="Time range">
           <CalendarClock />
-          <span className="hidden sm:inline">{timeRangeLabel(timeRange)}</span>
+          <span className="hidden xl:inline">{timeRangeLabel(timeRange)}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72">

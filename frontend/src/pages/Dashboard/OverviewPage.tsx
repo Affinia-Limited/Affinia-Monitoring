@@ -291,7 +291,7 @@ export function OverviewPage() {
   return (
     <div className="space-y-8">
       <header>
-        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Azure Monitoring</p>
+        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Affinia Monitoring</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">
           {greeting()}
           {name ? `, ${name}` : ""}
@@ -345,7 +345,7 @@ export function OverviewPage() {
         <p className="rounded-lg border border-border bg-card px-5 py-3 text-sm text-muted-foreground">
           {plural(o.totals.unassigned_resources, "monitored resource")} {o.totals.unassigned_resources === 1 ? "is" : "are"} not assigned to a
           project.{" "}
-          <Link to="/resources?view=unassigned" className="font-medium text-primary hover:underline">
+          <Link to="/resources?view=unassigned" className="font-medium text-link hover:underline">
             Review unassigned resources
           </Link>
         </p>

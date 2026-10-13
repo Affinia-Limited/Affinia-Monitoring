@@ -8,6 +8,7 @@ import { me, resource, viewer } from "@/test/fixtures";
 import { renderWithProviders } from "@/test/render";
 import { server } from "@/test/server";
 import { GlobalSearch } from "./GlobalSearch";
+import { AppLayout } from "./AppLayout";
 import { Sidebar } from "./Sidebar";
 
 describe("Sidebar", () => {
@@ -42,6 +43,41 @@ describe("Sidebar filters", () => {
     expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/?project=p1&env=e1&range=7d");
     // Administration pages have no global filters; page-specific parameters (view) are not carried.
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+  });
+});
+
+describe("Sidebar highlighting", () => {
+  it.each([
+    ["/settings", "Settings"],
+    ["/settings?tab=audit", "Audit log"],
+    ["/settings?tab=roles", "Settings"],
+    ["/settings/users", "Users"],
+    ["/settings/users/u1", "Users"],
+    ["/alerts", "Alerts"],
+    ["/resources/r1", "Resources"],
+    ["/", "Overview"],
+  ])("highlights exactly one item on %s", async (route, expected) => {
+    renderWithProviders(<Sidebar collapsed={false} />, { route });
+    await screen.findByRole("link", { name: "Users" }); // permissions loaded
+    const current = screen.getAllByRole("link").filter((link) => link.getAttribute("aria-current") === "page");
+    expect(current.map((link) => link.textContent)).toEqual([expected]);
+  });
+});
+
+describe("App shell", () => {
+  it("keeps the sidebar and top bar outside the scrolling content area", async () => {
+    renderWithProviders(
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<p>Page content</p>} />
+        </Route>
+      </Routes>,
+    );
+    const content = await screen.findByText("Page content");
+    const scroller = screen.getByTestId("content-scroll");
+    expect(scroller).toContainElement(content);
+    expect(scroller).not.toContainElement(screen.getByRole("banner"));
+    expect(scroller).not.toContainElement(screen.getAllByRole("navigation", { name: "Main" })[0]);
   });
 });
 

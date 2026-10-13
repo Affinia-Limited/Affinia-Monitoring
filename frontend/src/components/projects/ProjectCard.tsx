@@ -69,7 +69,7 @@ export function ProjectCard({ project }: { project: Project }) {
       </div>
       <Link
         to={paths.project(project.id)}
-        className="mt-3 inline-flex items-center gap-1 self-end text-sm font-medium text-primary hover:underline"
+        className="mt-3 inline-flex items-center gap-1 self-end text-sm font-medium text-link hover:underline"
         aria-label={`View project ${project.name}`}
       >
         View project <ArrowRight className="size-4" aria-hidden="true" />

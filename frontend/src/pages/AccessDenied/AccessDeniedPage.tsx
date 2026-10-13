@@ -5,11 +5,11 @@ import { Card } from "@/components/ui/card";
 const MESSAGES = {
   ACCESS_NOT_GRANTED: {
     title: "Access not granted",
-    body: "Your Microsoft account was authenticated successfully, but you have not been granted access to the Azure Monitoring Platform. Please contact your administrator to request access.",
+    body: "Your Microsoft account was authenticated successfully, but you have not been granted access to Affinia Monitoring. Please contact your administrator to request access.",
   },
   ACCESS_SUSPENDED: {
     title: "Access suspended",
-    body: "Your access to the Azure Monitoring Platform has been temporarily suspended. Please contact your administrator.",
+    body: "Your access to Affinia Monitoring has been temporarily suspended. Please contact your administrator.",
   },
 } as const;
 

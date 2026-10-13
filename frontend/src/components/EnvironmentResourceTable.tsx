@@ -248,7 +248,7 @@ export function EnvironmentResourceTable({
                         {state ? <LiveMark /> : <TimeAgo value={r.health_evaluated_at} />}
                       </TD>
                       <TD className="text-right">
-                        <Link to={paths.resource(r.id)} className="text-sm font-medium text-primary hover:underline" aria-label={`View ${r.name}`}>
+                        <Link to={paths.resource(r.id)} className="text-sm font-medium text-link hover:underline" aria-label={`View ${r.name}`}>
                           View
                         </Link>
                       </TD>

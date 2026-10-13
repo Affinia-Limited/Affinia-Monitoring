@@ -161,7 +161,7 @@ export function RuleOverridesTable({
               <TR key={base.metric} className={cn(!rule.enabled && "opacity-60")}>
                 <TD>
                   <div className="font-medium">{base.label}</div>
-                  {overrides[key] ? <div className="text-xs text-primary">Changed for this coverage</div> : null}
+                  {overrides[key] ? <div className="text-xs text-link">Changed for this coverage</div> : null}
                   {error ? (
                     <div role="alert" className="text-xs text-critical">
                       {error}

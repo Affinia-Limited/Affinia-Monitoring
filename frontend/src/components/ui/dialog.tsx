@@ -31,7 +31,7 @@ export function DialogContent({
         : "left-1/2 top-1/2 max-h-[90vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border";
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-black/40" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-[#001b1d]/55" />
       <DialogPrimitive.Content
         className={cn("fixed z-50 flex flex-col border-border bg-popover text-popover-foreground shadow-xl", position, className)}
       >

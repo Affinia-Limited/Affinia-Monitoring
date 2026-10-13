@@ -31,7 +31,7 @@ export function ProjectEnvironmentSelect() {
     <div className="hidden items-center gap-2 lg:flex">
       <Select
         aria-label="Project"
-        className="h-8 w-auto min-w-40 max-w-60 text-xs"
+        className="h-8 w-auto min-w-32 max-w-60 text-xs xl:min-w-40"
         value={projectId ?? ""}
         onChange={(e) => setProject(e.target.value || null)}
       >
@@ -44,7 +44,7 @@ export function ProjectEnvironmentSelect() {
       </Select>
       <Select
         aria-label="Environment"
-        className="h-8 w-auto min-w-40 max-w-60 text-xs"
+        className="h-8 w-auto min-w-32 max-w-60 text-xs xl:min-w-40"
         value={environmentId ?? ""}
         disabled={!project}
         onChange={(e) => setEnvironment(e.target.value || null)}
@@ -100,7 +100,7 @@ function Notifications() {
       <Link to="/alerts" aria-label={`${count} open alerts`} className="relative">
         <Bell />
         {count > 0 ? (
-          <span className="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-critical px-1 text-center text-[10px] leading-4 font-semibold text-white">
+          <span className="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-destructive px-1 text-center text-[10px] leading-4 font-semibold text-destructive-foreground">
             {count > 99 ? "99+" : count}
           </span>
         ) : null}
@@ -134,7 +134,7 @@ function UserMenu() {
           <span className="flex size-7 items-center justify-center rounded-full bg-muted">
             <User className="size-4" />
           </span>
-          <span className="hidden max-w-36 truncate text-left xl:block">{me?.display_name ?? me?.email ?? "Account"}</span>
+          <span className="hidden max-w-36 truncate text-left 2xl:block">{me?.display_name ?? me?.email ?? "Account"}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-60">
@@ -166,7 +166,7 @@ export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: 
   const contextKnown = CONTEXT_ROUTES.some((r) => r.test(pathname));
   const { live } = useLiveMode();
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-card/95 px-3 backdrop-blur md:px-4">
+    <header className="z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-3 md:px-4">
       <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="Open navigation" onClick={onOpenMobileNav}>
         <Menu />
       </Button>
@@ -174,7 +174,7 @@ export function TopBar({ onToggleSidebar, onOpenMobileNav }: { onToggleSidebar: 
         <PanelLeft />
       </Button>
       <GlobalSearch />
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         <ModePills />
         {contextKnown ? null : <ProjectEnvironmentSelect />}
         <LiveToggle />

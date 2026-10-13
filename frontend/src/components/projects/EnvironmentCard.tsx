@@ -40,7 +40,7 @@ export function EnvironmentCard({ projectId, environment }: { projectId: string;
       </div>
       <Link
         to={paths.environment(projectId, e.id)}
-        className="mt-3 inline-flex items-center gap-1 self-end text-sm font-medium text-primary hover:underline"
+        className="mt-3 inline-flex items-center gap-1 self-end text-sm font-medium text-link hover:underline"
         aria-label={`Open environment ${e.name}`}
       >
         Open environment <ArrowRight className="size-4" aria-hidden="true" />

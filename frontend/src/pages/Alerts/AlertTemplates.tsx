@@ -701,7 +701,7 @@ function TemplateSection({ template, defaultOpen }: { template: AlertTemplate; d
                 <TR key={r.metric} className={cn(!r.enabled && "opacity-60")}>
                   <TD>
                     <div className="font-medium">{r.label}</div>
-                    {r.customized ? <div className="text-xs text-primary">Customised</div> : null}
+                    {r.customized ? <div className="text-xs text-link">Customised</div> : null}
                   </TD>
                   <TD className="whitespace-nowrap text-muted-foreground">{OPERATOR_WORD[r.operator]}</TD>
                   {TIERS.map((t) => (

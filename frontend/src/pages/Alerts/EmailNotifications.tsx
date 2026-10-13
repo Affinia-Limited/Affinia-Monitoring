@@ -195,7 +195,7 @@ function Recipients({ addresses }: { addresses: string[] }) {
       ))}
       {addresses.length > VISIBLE_RECIPIENTS ? (
         <li>
-          <button type="button" className="px-1 text-xs text-primary hover:underline" onClick={() => setExpanded((v) => !v)}>
+          <button type="button" className="px-1 text-xs text-link hover:underline" onClick={() => setExpanded((v) => !v)}>
             {expanded ? "Show fewer" : `+${addresses.length - VISIBLE_RECIPIENTS} more`}
           </button>
         </li>

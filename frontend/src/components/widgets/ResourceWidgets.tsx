@@ -172,7 +172,7 @@ export function AppInsightsStatus({ widget, resource }: WidgetProps) {
       {linkedId ? (
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
           <span>This app sends telemetry to a linked Application Insights component.</span>
-          <Link to={`/resources/${linkedId}`} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">
+          <Link to={`/resources/${linkedId}`} className="inline-flex items-center gap-1 font-medium text-link hover:underline">
             Open Application Insights <ExternalLink className="size-3.5" />
           </Link>
         </div>

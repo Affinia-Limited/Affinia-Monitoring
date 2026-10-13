@@ -53,7 +53,7 @@ function PlanTable({ rules, showCurrent }: { rules: AlertPlanRule[]; showCurrent
                 <div className="font-medium">{r.label}</div>
                 <div className="text-xs text-muted-foreground">
                   {r.enabled ? `${r.window_minutes} min window` : "Off"}
-                  {r.overridden ? <span className="text-primary"> · customised here</span> : null}
+                  {r.overridden ? <span className="text-link"> · customised here</span> : null}
                 </div>
               </TD>
               <TD className="whitespace-nowrap text-muted-foreground">{OPERATOR_WORD[r.operator]}</TD>

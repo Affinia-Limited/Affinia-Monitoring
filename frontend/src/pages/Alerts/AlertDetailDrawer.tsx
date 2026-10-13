@@ -58,7 +58,7 @@ export function AlertDetailDrawer({ alertId, onClose }: { alertId: string | null
               </div>
               <KeyValue
                 items={[
-                  { label: "Resource", value: <Link className="text-primary hover:underline" to={`/resources/${a.resource_id}`}>{a.resource_name}</Link> },
+                  { label: "Resource", value: <Link className="text-link hover:underline" to={`/resources/${a.resource_id}`}>{a.resource_name}</Link> },
                   { label: "Type", value: a.type_display_name },
                   { label: "Metric", value: a.metric_name },
                   { label: "Current value", value: formatValue(a.current_value, a.unit ?? "") },

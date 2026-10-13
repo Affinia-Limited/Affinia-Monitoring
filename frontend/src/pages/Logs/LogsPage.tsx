@@ -134,7 +134,7 @@ export function LogsPage() {
                 <span>
                   Showing <span className="font-medium">{scopeLabel}</span> ({scopedTargets.length})
                 </span>
-                <button type="button" className="text-primary hover:underline" onClick={() => setProject(null)}>
+                <button type="button" className="text-link hover:underline" onClick={() => setProject(null)}>
                   Show all
                 </button>
               </p>

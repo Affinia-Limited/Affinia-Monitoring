@@ -2,25 +2,45 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Affinia theme (Affinia brand guidelines, adapted for a monitoring dashboard).
+ *
+ * Identity: Forest Green #002729, Honeydew #D5F2E3, Action Orange #FF6633, White.
+ *   - Forest Green is the text and the active navigation colour (dark mode: the surfaces).
+ *   - Honeydew is the sidebar and the quiet accent surfaces.
+ *   - Action Orange marks actions (primary buttons, links in dark mode). White text on it is only
+ *     2.9:1, so buttons carry Forest Green text (5.5:1, WCAG AA) and stay within the four colours.
+ * Data visualisation: Bright Teal #4BC4C0, Lavender #9B7CF5, Purple #7048C8, Pink #F28AB2,
+ *   Golden Yellow #F2A900, Blue #35B5D8 (used for chart series, never for health).
+ * Health keeps distinct semantic colours (green / amber / red / grey): an operator must tell
+ *   warning from critical at a glance, so Action Orange never means "alert".
+ * Every text colour below reaches WCAG AA (4.5:1) on the surfaces it is used on.
+ */
 :root {
-  --background: #f6f7f9;
-  --foreground: #111827;
+  --background: #f6fbf8; /* White with a breath of Honeydew, so white cards stand off the page */
+  --foreground: #002729; /* Forest Green */
   --card: #ffffff;
-  --card-foreground: #111827;
+  --card-foreground: #002729;
   --popover: #ffffff;
-  --popover-foreground: #111827;
-  --muted: #eef0f4;
-  --muted-foreground: #5b6474;
-  --border: #e6e8ed;
-  --input: #d6dae2;
-  --ring: #2f6fb3;
-  --primary: #1f5f99;
-  --primary-foreground: #ffffff;
-  --accent: #e9f0f8;
-  --accent-foreground: #173f66;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #283142;
-  --destructive: #c62f3b;
+  --popover-foreground: #002729;
+  --muted: #eaf6f0; /* Honeydew, lighter */
+  --muted-foreground: #3e5b5d; /* Forest Green, desaturated: 7.0:1 on the page */
+  --border: #cfe6da; /* Honeydew, darker */
+  --input: #b8d6c7;
+  --ring: #002729; /* Focus outline: Forest Green (Action Orange is only 2.9:1 on white) */
+  --primary: #ff6633; /* Action Orange */
+  --primary-foreground: #002729;
+  --accent: #d5f2e3; /* Honeydew */
+  --accent-foreground: #002729;
+  --link: #a83a12; /* Action Orange, deepened for text on light surfaces (5.6:1) */
+  --sidebar: #d5f2e3; /* Honeydew */
+  --sidebar-foreground: #002729;
+  --sidebar-muted: #3e5b5d;
+  --sidebar-border: #b4d9c5;
+  --sidebar-hover: #c2e8d4;
+  --sidebar-active: #002729; /* Forest Green */
+  --sidebar-active-foreground: #ffffff;
+  --destructive: #c22b3a;
   --destructive-foreground: #ffffff;
 
   /* Light-mode status colours are also text colours: each reaches WCAG AA (4.5:1) on --card and --background. */
@@ -28,59 +48,66 @@
   --status-warning: #9a5b00;
   --status-critical: #c22b3a;
   --status-unknown: #5f6878;
-  --status-info: #2f6fb3;
+  --status-info: #0f6e8c;
 
-  --chart-1: #2f6fb3;
-  --chart-2: #1aa39a;
-  --chart-3: #8a5cd6;
-  --chart-4: #e07a2e;
-  --chart-5: #d4478f;
-  --chart-6: #5aa02c;
-  --chart-7: #b9912a;
-  --chart-8: #4c5d7a;
-  --chart-grid: #e7e9ee;
+  /* Chart series: the brand identity first, then the data-visualisation palette. */
+  --chart-1: #002729; /* Forest Green */
+  --chart-2: #ff6633; /* Action Orange */
+  --chart-3: #4bc4c0; /* Bright Teal */
+  --chart-4: #7048c8; /* Purple */
+  --chart-5: #35b5d8; /* Blue */
+  --chart-6: #f2a900; /* Golden Yellow */
+  --chart-7: #f28ab2; /* Pink */
+  --chart-8: #9b7cf5; /* Lavender */
+  --chart-grid: #e3efe8;
 
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-feature-settings: "cv11", "ss01";
 }
 
 .dark {
-  --background: #0d1117;
-  --foreground: #e6e9ef;
-  --card: #151a23;
-  --card-foreground: #e6e9ef;
-  --popover: #1a202b;
-  --popover-foreground: #e6e9ef;
-  --muted: #1d2330;
-  --muted-foreground: #98a2b3;
-  --border: #232a36;
-  --input: #323a4a;
-  --ring: #5b9be0;
-  --primary: #4a8fd8;
-  --primary-foreground: #0b1320;
-  --accent: #1c2a3d;
-  --accent-foreground: #cfe1f7;
-  --sidebar: #11161e;
-  --sidebar-foreground: #c9d0dc;
-  --destructive: #e5535f;
-  --destructive-foreground: #ffffff;
+  --background: #001b1d; /* Forest Green, darkest */
+  --foreground: #ffffff;
+  --card: #0a3338; /* Forest Green, lifted */
+  --card-foreground: #ffffff;
+  --popover: #0d3a40;
+  --popover-foreground: #ffffff;
+  --muted: #0f3d42;
+  --muted-foreground: #a9cdbd; /* Honeydew, dimmed: 7.9:1 on cards */
+  --border: #154a50;
+  --input: #1d5a60;
+  --ring: #ff6633; /* Action Orange: 6.1:1 on the page */
+  --primary: #ff6633;
+  --primary-foreground: #001b1d;
+  --accent: #134a4f;
+  --accent-foreground: #d5f2e3;
+  --link: #ff8a5c;
+  --sidebar: #001b1d; /* Matches the page, as in Affinia */
+  --sidebar-foreground: #ffffff;
+  --sidebar-muted: #a9cdbd;
+  --sidebar-border: #0f3d42;
+  --sidebar-hover: #0d3a40;
+  --sidebar-active: #ff6633; /* Action Orange */
+  --sidebar-active-foreground: #001b1d;
+  --destructive: #ff7a85;
+  --destructive-foreground: #001b1d;
 
   --status-healthy: #34c27f;
-  --status-warning: #f0a93a;
-  --status-critical: #f0606d;
-  --status-unknown: #7d879a;
-  --status-info: #5b9be0;
+  --status-warning: #f2a900; /* Golden Yellow */
+  --status-critical: #ff7a85;
+  --status-unknown: #8fa3a6;
+  --status-info: #35b5d8; /* Blue */
 
-  --chart-1: #5b9be0;
-  --chart-2: #3cc3b9;
-  --chart-3: #a584ec;
-  --chart-4: #f09a55;
-  --chart-5: #ea6fae;
-  --chart-6: #7fc452;
-  --chart-7: #d8b34d;
-  --chart-8: #8f9cb6;
-  --chart-grid: #232a37;
+  --chart-1: #d5f2e3; /* Honeydew: Forest Green inverted for dark surfaces */
+  --chart-2: #ff6633;
+  --chart-3: #4bc4c0;
+  --chart-4: #9b7cf5;
+  --chart-5: #35b5d8;
+  --chart-6: #f2a900;
+  --chart-7: #f28ab2;
+  --chart-8: #7048c8;
+  --chart-grid: #154a50;
 }
 
 @theme inline {
@@ -101,6 +128,12 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-foreground: var(--sidebar-active-foreground);
+  --color-link: var(--link);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-healthy: var(--status-healthy);

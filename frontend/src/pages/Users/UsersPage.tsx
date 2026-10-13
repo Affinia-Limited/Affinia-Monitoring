@@ -109,7 +109,7 @@ export function UsersPage() {
         title="You do not have access to user management"
         description="Ask a Super Admin if you need to add or change users."
         action={
-          <Link className="text-primary hover:underline" to="/settings">
+          <Link className="text-link hover:underline" to="/settings">
             Back to settings
           </Link>
         }

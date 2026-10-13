@@ -77,7 +77,7 @@ export function EnvironmentPill({ label, tooltip }: { label: string; tooltip: st
     <Tooltip content={tooltip}>
       <span
         tabIndex={0}
-        className="hidden shrink-0 items-center whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground sm:inline-flex"
+        className="hidden shrink-0 items-center whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground xl:inline-flex"
       >
         {label}
       </span>

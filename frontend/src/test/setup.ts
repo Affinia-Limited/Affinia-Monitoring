@@ -26,6 +26,8 @@ if (!window.matchMedia) {
 }
 
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView ?? (() => {});
+// Like current Chromium, scrollTo returns a Promise (an effect that returns it crashes React).
+Element.prototype.scrollTo = (() => Promise.resolve()) as unknown as typeof Element.prototype.scrollTo;
 window.HTMLElement.prototype.hasPointerCapture = window.HTMLElement.prototype.hasPointerCapture ?? (() => false);
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));

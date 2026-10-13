@@ -25,7 +25,7 @@ function NotFound() {
     <EmptyState
       title="Page not found"
       action={
-        <Link className="text-primary hover:underline" to="/">
+        <Link className="text-link hover:underline" to="/">
           Back to the overview
         </Link>
       }
